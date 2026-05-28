@@ -1,0 +1,41 @@
+# Common setup: install extension, create test schema, enable server.
+--disable_warnings
+DROP DATABASE IF EXISTS test_rest;
+CREATE DATABASE test_rest;
+--enable_warnings
+
+CREATE TABLE test_rest.customers (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    name VARCHAR(100), email VARCHAR(100), age INT);
+CREATE TABLE test_rest.orders (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    customer_id INT, total DECIMAL(10,2), status VARCHAR(20),
+    FOREIGN KEY (customer_id) REFERENCES test_rest.customers(id));
+
+INSERT INTO test_rest.customers VALUES
+    (1,'Alice','alice@example.com',25),
+    (2,'Bob','bob@example.com',35),
+    (3,'Carol','carol@example.com',45);
+INSERT INTO test_rest.orders VALUES
+    (1,1,99.99,'pending'),(2,1,49.50,'shipped'),
+    (3,2,200.00,'pending'),(4,2,15.00,'cancelled'),(5,3,75.00,'pending');
+
+DROP FUNCTION IF EXISTS test_rest.add_numbers;
+CREATE FUNCTION test_rest.add_numbers(a INT, b INT) RETURNS INT DETERMINISTIC RETURN a + b;
+
+DROP PROCEDURE IF EXISTS test_rest.mark_shipped;
+delimiter //;
+CREATE PROCEDURE test_rest.mark_shipped(IN order_id INT)
+BEGIN
+  UPDATE test_rest.orders SET status='shipped' WHERE id=order_id;
+END//
+delimiter ;//
+
+INSTALL EXTENSION vsql_rest;
+SET GLOBAL vsql_rest.port = 18080;
+SET GLOBAL vsql_rest.schema = 'test_rest';
+SET GLOBAL vsql_rest.schema_ttl = 2;
+SET GLOBAL vsql_rest.vsql_rest_enabled = ON;
+
+# Wait for server to start
+--sleep 1.5

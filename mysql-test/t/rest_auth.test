@@ -1,0 +1,39 @@
+--source rest_setup.inc
+
+SET GLOBAL vsql_rest.jwt_secret = 'test-secret-key';
+SET GLOBAL vsql_rest.require_auth = ON;
+--sleep 0.3
+
+# C36: No Authorization header → 401.
+--exec curl -s -o /dev/null -w "%{http_code}" "http://localhost:18080/customers"
+--echo ""
+
+# C37: Valid HS256 JWT → 200.
+--exec python3 /Users/villageadam/Documents/GitHub/vsql-rest/mysql-test/t/rest_jwt_helper.py valid_200
+
+# C38: Expired JWT → 401.
+--exec python3 /Users/villageadam/Documents/GitHub/vsql-rest/mysql-test/t/rest_jwt_helper.py expired_401
+
+# C40: JWT sub injected as @vsql_rest_jwt_sub; view filters by it.
+# MySQL views cannot use user variables directly; a helper function is required.
+--disable_warnings
+DROP FUNCTION IF EXISTS test_rest.vsql_rest_jwt_sub;
+DROP VIEW IF EXISTS test_rest.owned;
+--enable_warnings
+delimiter //;
+CREATE FUNCTION test_rest.vsql_rest_jwt_sub() RETURNS VARCHAR(255)
+NOT DETERMINISTIC READS SQL DATA
+BEGIN RETURN @vsql_rest_jwt_sub; END//
+delimiter ;//
+CREATE VIEW test_rest.owned AS
+    SELECT * FROM test_rest.customers
+    WHERE email = test_rest.vsql_rest_jwt_sub();
+
+# Wait for schema cache TTL (2s in test mode) to expire so view is visible.
+--sleep 2.5
+
+--exec python3 /Users/villageadam/Documents/GitHub/vsql-rest/mysql-test/t/rest_jwt_helper.py view_filter
+
+SET GLOBAL vsql_rest.require_auth = OFF;
+
+--source rest_teardown.inc

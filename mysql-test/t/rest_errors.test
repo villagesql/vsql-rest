@@ -1,0 +1,25 @@
+--source rest_setup.inc
+
+# C31: Unknown table → 404 with JSON error body.
+--exec curl -s -o /dev/null -w "%{http_code}" "http://localhost:18080/nonexistent_table"
+--echo ""
+--exec curl -s "http://localhost:18080/nonexistent_table" | python3 -c "import sys,json; d=json.load(sys.stdin); print('message' in d)"
+
+# C32: Invalid JSON body → 400 with JSON error body.
+--exec curl -s -o /dev/null -w "%{http_code}" -X POST -H "Content-Type: application/json" -d "not valid json" "http://localhost:18080/customers"
+--echo ""
+--exec curl -s -X POST -H "Content-Type: application/json" -d "not valid json" "http://localhost:18080/customers" | python3 -c "import sys,json; d=json.load(sys.stdin); print('message' in d)"
+
+# C33: Unknown filter operator → 400.
+--exec curl -s -o /dev/null -w "%{http_code}" "http://localhost:18080/customers?age=badop.30"
+--echo ""
+
+# C34: DELETE without filter → 400.
+--exec curl -s -o /dev/null -w "%{http_code}" -X DELETE "http://localhost:18080/customers"
+--echo ""
+
+# C35: PATCH without filter → 400.
+--exec curl -s -o /dev/null -w "%{http_code}" -X PATCH -H "Content-Type: application/json" -d '{"age":99}' "http://localhost:18080/customers"
+--echo ""
+
+--source rest_teardown.inc

@@ -1,0 +1,13 @@
+--source rest_setup.inc
+
+# C1: Server responds 200 when enabled.
+--exec curl -s -o /dev/null -w "%{http_code}" "http://localhost:18080/customers"
+--echo ""
+
+# C2: Server stops accepting connections after vsql_rest_enabled = OFF.
+SET GLOBAL vsql_rest.vsql_rest_enabled = OFF;
+--sleep 0.8
+--exec curl -s --connect-timeout 2 -o /dev/null -w "%{http_code}" "http://localhost:18080/customers" || echo "connection refused"
+--echo ""
+
+--source rest_teardown.inc

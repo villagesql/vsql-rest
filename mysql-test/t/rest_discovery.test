@@ -1,0 +1,6 @@
+--source rest_setup.inc
+
+# C43: GET / returns definitions key with customers and orders entries.
+--exec curl -s "http://localhost:18080/" | python3 -c "import sys,json; d=json.load(sys.stdin); defs=d.get('definitions',{}); print('definitions key:','definitions' in d); print('customers present:','customers' in defs); print('orders present:','orders' in defs); print('customers has properties:','properties' in defs.get('customers',{}))"
+
+--source rest_teardown.inc

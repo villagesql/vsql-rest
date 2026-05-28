@@ -1,0 +1,38 @@
+--source rest_setup.inc
+
+# C19: POST single row → 201 + Location header.
+--exec curl -s -D - -X POST -H "Content-Type: application/json" -d '{"name":"Dave","email":"dave@example.com","age":28}' "http://localhost:18080/customers" | grep -E "^HTTP/1.1|^Location:" | tr -d '\r'
+SELECT COUNT(*) FROM test_rest.customers WHERE name = 'Dave';
+
+# C20: POST with Prefer: return=representation → 200 + row body.
+--exec curl -s -o /dev/null -w "%{http_code}" -X POST -H "Content-Type: application/json" -H "Prefer: return=representation" -d '{"name":"Eve","email":"eve@example.com","age":22}' "http://localhost:18080/customers"
+--echo ""
+
+# C21: POST array → bulk insert, 201.
+--exec curl -s -o /dev/null -w "%{http_code}" -X POST -H "Content-Type: application/json" -d '[{"name":"Frank","email":"frank@example.com","age":50},{"name":"Grace","email":"grace@example.com","age":55}]' "http://localhost:18080/customers"
+--echo ""
+SELECT COUNT(*) FROM test_rest.customers WHERE name IN ('Frank', 'Grace');
+
+# C22: PATCH with filter → 204, side effect verified.
+--exec curl -s -o /dev/null -w "%{http_code}" -X PATCH -H "Content-Type: application/json" -d '{"status":"shipped"}' "http://localhost:18080/orders?id=eq.1"
+--echo ""
+SELECT status FROM test_rest.orders WHERE id = 1;
+
+# C23: PATCH with Prefer: return=representation → 200.
+--exec curl -s -o /dev/null -w "%{http_code}" -X PATCH -H "Content-Type: application/json" -H "Prefer: return=representation" -d '{"status":"cancelled"}' "http://localhost:18080/orders?id=eq.2"
+--echo ""
+
+# C24: DELETE with filter → 204, row gone.
+--exec curl -s -o /dev/null -w "%{http_code}" -X DELETE "http://localhost:18080/orders?id=eq.5"
+--echo ""
+SELECT COUNT(*) FROM test_rest.orders WHERE id = 5;
+
+# C34: DELETE without filter → 400.
+--exec curl -s -o /dev/null -w "%{http_code}" -X DELETE "http://localhost:18080/customers"
+--echo ""
+
+# C35: PATCH without filter → 400.
+--exec curl -s -o /dev/null -w "%{http_code}" -X PATCH -H "Content-Type: application/json" -d '{"age":99}' "http://localhost:18080/customers"
+--echo ""
+
+--source rest_teardown.inc

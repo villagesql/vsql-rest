@@ -20,5 +20,202 @@
 #include <villagesql/preview/sys_var.h>
 #include <villagesql/preview/status_var.h>
 
-// TODO(villagesql): implement thread_worker callback, capability globals,
-// sys_var / status_var registration, and VEF_GENERATE_ENTRY_POINTS.
+#include <atomic>
+#include <cstring>
+#include <optional>
+#include <thread>
+#include <unistd.h>
+
+#include "http_server.h"
+#include "request_queue.h"
+#include "schema_cache.h"
+#include "sql_executor.h"
+
+// ============================================================================
+// Global state
+// ============================================================================
+
+namespace {
+
+// Sys var backing storage. Written by the server when SET GLOBAL fires.
+static long long g_port        = 3000;
+static long long g_ssl_port    = 3443;
+static char*     g_ssl_cert    = nullptr;
+static char*     g_ssl_key     = nullptr;
+static char*     g_schema      = nullptr;
+static bool      g_require_auth = false;
+static char*     g_jwt_secret  = nullptr;
+static char*     g_jwt_pubkey  = nullptr;
+static long long g_schema_ttl  = 60;
+static long long g_max_rows    = 1000;
+
+// Status var backing storage. Written by the extension.
+static long long g_requests_total     = 0;
+static long long g_connections_total  = 0;
+static long long g_requests_active    = 0;
+
+// Runtime state — valid only between ENABLE and DISABLE.
+static int                g_listen_fd     = -1;
+static int                g_ssl_listen_fd = -1;
+static vsql_rest::TlsContext g_tls_ctx;
+static std::optional<vsql_rest::RequestQueue> g_queue;
+static std::atomic<bool>  g_running{false};
+static std::thread        g_accept_thread;
+static std::thread        g_ssl_accept_thread;
+static vsql_rest::SchemaCache g_schema_cache;
+
+}  // namespace
+
+// ============================================================================
+// Capabilities
+// ============================================================================
+
+namespace stv = vsql::preview_status_var;
+namespace syv = vsql::preview_sys_var;
+namespace sq  = vsql::preview_sql_query;
+namespace tw  = vsql::preview_thread_worker;
+
+static sq::SqlQueryCapability g_sql_query_cap;
+
+static auto g_sys_vars = syv::make_capability({
+  syv::make_int ("port",           "HTTP listen port",          &g_port,         3000, 1, 65535),
+  syv::make_int ("ssl_port",       "HTTPS listen port",         &g_ssl_port,     3443, 1, 65535),
+  syv::make_str ("ssl_cert",       "Path to TLS cert file",     &g_ssl_cert,     ""),
+  syv::make_str ("ssl_key",        "Path to TLS key file",      &g_ssl_key,      ""),
+  syv::make_str ("schema",         "Exposed database schema",   &g_schema,       ""),
+  syv::make_bool("require_auth",   "Require JWT on all requests",&g_require_auth, false),
+  syv::make_str ("jwt_secret",     "HMAC secret for HS256",     &g_jwt_secret,   ""),
+  syv::make_str ("jwt_public_key", "RSA public key path (RS256)",&g_jwt_pubkey,   ""),
+  syv::make_int ("schema_ttl",     "Schema cache TTL (seconds)", &g_schema_ttl,   60, 1, 86400),
+  syv::make_int ("max_rows",       "Default row limit",          &g_max_rows,    1000, 1, 1000000),
+});
+
+static auto g_status_vars = stv::make_capability({
+  stv::make_int("requests_total",    &g_requests_total),
+  stv::make_int("connections_total", &g_connections_total),
+  stv::make_int("requests_active",   &g_requests_active),
+});
+
+// ============================================================================
+// Thread worker callback
+// ============================================================================
+
+static vef_next_wakeup_t rest_worker(vef_wakeup_reason_t reason,
+                                     vef_thread_handle_t* handle,
+                                     void* /*arg*/) {
+  switch (reason) {
+    case VEF_WAKEUP_ENABLE: {
+      // handle is NULL at ENABLE — cannot open SQL session here.
+      // Create the request queue, listen sockets, and start accept threads.
+      g_queue.emplace();
+      g_running.store(true, std::memory_order_relaxed);
+
+      // HTTP listener.
+      g_listen_fd = vsql_rest::create_listen_socket(static_cast<int>(g_port));
+
+      // HTTPS listener (only if cert+key are configured).
+      std::string cert = g_ssl_cert ? g_ssl_cert : "";
+      std::string key  = g_ssl_key  ? g_ssl_key  : "";
+      if (!cert.empty() && !key.empty()) {
+        std::string tls_err;
+        if (g_tls_ctx.init(cert, key, tls_err)) {
+          g_ssl_listen_fd = vsql_rest::create_listen_socket(
+              static_cast<int>(g_ssl_port));
+        }
+      }
+
+      // Start accept threads.
+      if (g_listen_fd >= 0) {
+        g_accept_thread = std::thread(vsql_rest::accept_loop,
+                                      g_listen_fd, nullptr,
+                                      &*g_queue, &g_running);
+      }
+      if (g_ssl_listen_fd >= 0 && g_tls_ctx.is_valid()) {
+        g_ssl_accept_thread = std::thread(vsql_rest::accept_loop,
+                                          g_ssl_listen_fd,
+                                          g_tls_ctx.get(),
+                                          &*g_queue, &g_running);
+      }
+
+      // Re-arm on signal pipe with 50ms fallback.
+      return {50, g_queue->signal_fd()};
+    }
+
+    case VEF_WAKEUP_POLL_FD:
+    case VEF_WAKEUP_PERIODIC: {
+      if (!g_queue || !handle) return {};
+
+      std::string schema_name = g_schema ? g_schema : "";
+      if (schema_name.empty()) return {};
+
+      // Open SQL session for this wakeup.
+      auto session = g_sql_query_cap.open(handle);
+      if (!session) return {};
+
+      // Refresh schema cache if needed.
+      g_schema_cache.refresh_if_needed(session, schema_name,
+                                       static_cast<int>(g_schema_ttl));
+
+      // Drain and process all queued requests.
+      auto pending = g_queue->drain();
+      g_requests_active += static_cast<long long>(pending.size());
+
+      for (auto& p : pending) {
+        ++g_requests_total;
+        vsql_rest::HttpResponse resp = vsql_rest::execute_request(
+            session, p.req,
+            schema_name, g_schema_cache,
+            g_jwt_secret  ? g_jwt_secret  : "",
+            g_jwt_pubkey  ? g_jwt_pubkey  : "",
+            g_require_auth,
+            g_max_rows);
+        --g_requests_active;
+
+        p.promise.set_value(std::move(resp));
+      }
+
+      if (reason == VEF_WAKEUP_POLL_FD) {
+        return {0, g_queue->signal_fd()};
+      }
+      return {};
+    }
+
+    case VEF_WAKEUP_DISABLE: {
+      // Signal accept threads to stop, close sockets.
+      g_running.store(false, std::memory_order_relaxed);
+
+      if (g_listen_fd >= 0) {
+        close(g_listen_fd);
+        g_listen_fd = -1;
+      }
+      if (g_ssl_listen_fd >= 0) {
+        close(g_ssl_listen_fd);
+        g_ssl_listen_fd = -1;
+      }
+
+      if (g_accept_thread.joinable()) g_accept_thread.join();
+      if (g_ssl_accept_thread.joinable()) g_ssl_accept_thread.join();
+
+      g_tls_ctx.reset();
+
+      g_queue.reset();
+
+      return {};
+    }
+  }
+  return {};
+}
+
+static tw::ThreadWorkerCapability<&rest_worker> g_worker{"rest",
+                                                         "vsql_rest_enabled"};
+
+// ============================================================================
+// VEF entry point
+// ============================================================================
+
+VEF_GENERATE_ENTRY_POINTS(
+    vsql::make_extension()
+        .with(g_worker)
+        .with(g_sql_query_cap)
+        .with(g_sys_vars)
+        .with(g_status_vars))

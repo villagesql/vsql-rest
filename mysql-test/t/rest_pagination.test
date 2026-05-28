@@ -1,0 +1,18 @@
+--source rest_setup.inc
+
+# C14: order=col.desc returns rows in descending order.
+--exec curl -s "http://localhost:18080/customers?order=age.desc" | python3 -c "import sys,json; d=json.load(sys.stdin); print([r['name'] for r in d])"
+
+# C15: order + limit + offset for pagination.
+--exec curl -s "http://localhost:18080/customers?order=age.asc&limit=2&offset=1" | python3 -c "import sys,json; d=json.load(sys.stdin); print([r['name'] for r in d])"
+
+# C16: limit returns Content-Range with unknown total (*).
+--exec curl -s -D - "http://localhost:18080/customers?limit=2" | grep -i "^content-range:" | tr -d '\r'
+
+# C17: Prefer: count=exact returns Content-Range with total.
+--exec curl -s -H "Prefer: count=exact" -D - "http://localhost:18080/customers?limit=2" | grep -i "^content-range:" | tr -d '\r'
+
+# C18: select=col1,col2 returns only requested columns.
+--exec curl -s "http://localhost:18080/customers?select=id,name" | python3 -c "import sys,json; d=json.load(sys.stdin); print(sorted(d[0].keys()))"
+
+--source rest_teardown.inc

@@ -42,6 +42,7 @@ add_library(vsql_rest SHARED
     src/json_emit.cc
     src/schema_cache.cc
     src/request_queue.cc
+    src/third_party/picohttpparser.c
 )
 
 # include-dev must come before include so preview headers take precedence
@@ -50,6 +51,7 @@ target_include_directories(vsql_rest PRIVATE
     "${VillageSQL_PREFIX}/include-dev"
     "${VillageSQLExtensionFramework_INCLUDE_DIR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/third_party"
 )
 
 target_link_libraries(vsql_rest PRIVATE

@@ -17,9 +17,30 @@
 #ifndef VSQL_REST_HTTP_SERVER_H
 #define VSQL_REST_HTTP_SERVER_H
 
-// TODO(villagesql): TCP accept loop, connection thread dispatch.
-// Starts a std::thread that calls accept() on the listen socket and spawns
-// per-connection threads. Each connection thread parses the HTTP request via
-// picohttpparser and pushes a ParsedRequest onto the request queue.
+#include <atomic>
+#include <string>
+#include <thread>
+
+#include "request_queue.h"
+#include "tls.h"
+
+namespace vsql_rest {
+
+// Create and bind a listening TCP socket on the given port.
+// Returns the fd, or -1 on failure (errno set).
+int create_listen_socket(int port);
+
+// Format an HttpResponse as a raw HTTP/1.1 response string.
+std::string format_http_response(const HttpResponse& resp);
+
+// Accept loop: calls accept() on listen_fd in a loop. For each accepted
+// connection, spawns a detached std::thread that reads one HTTP request,
+// pushes it onto the queue, waits for the response, and sends it back.
+// ssl_ctx may be null for plain HTTP.
+// Runs until running is set to false OR listen_fd is closed.
+void accept_loop(int listen_fd, SSL_CTX* ssl_ctx, RequestQueue* queue,
+                 std::atomic<bool>* running);
+
+}  // namespace vsql_rest
 
 #endif  // VSQL_REST_HTTP_SERVER_H

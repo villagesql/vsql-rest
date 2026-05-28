@@ -1,0 +1,16 @@
+--source rest_setup.inc
+
+# C27: RPC stored function returns scalar.
+--exec curl -s -X POST -H "Content-Type: application/json" -d '{"a":7,"b":5}' "http://localhost:18080/rpc/add_numbers"
+--echo ""
+
+# C28: RPC DML-only procedure; verify side effect via SQL.
+# mark_shipped updates an order's status to 'shipped'.
+--exec curl -s -o /dev/null -w "%{http_code}" -X POST -H "Content-Type: application/json" -d '{"order_id":3}' "http://localhost:18080/rpc/mark_shipped"
+--echo ""
+SELECT status FROM test_rest.orders WHERE id = 3;
+
+# 29/30: Response headers include Content-Type and Content-Length.
+--exec curl -s -D - "http://localhost:18080/customers" | grep -iE "^content-type:|^content-length:" | sort | tr -d '\r'
+
+--source rest_teardown.inc
