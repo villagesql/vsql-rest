@@ -14,24 +14,12 @@
  * along with this program; if not, see <https://www.gnu.org/licenses/>.
  */
 
-#include <villagesql/vsql.h>
+#ifndef VSQL_REST_SCHEMA_CACHE_H
+#define VSQL_REST_SCHEMA_CACHE_H
 
-#include <cstring>
+// TODO(villagesql): INFORMATION_SCHEMA introspection for tables, columns,
+// and FK relationships. Builds an in-memory FK graph used for resource
+// embedding (?select=*,relation(*)). Refreshed on TTL expiry (vsql_rest_schema_ttl).
+// Column and table name whitelist used by sql_executor to prevent injection.
 
-using namespace vsql;
-
-void hello_world_impl(StringResult out) {
-  const char* hello = "Hello, World!";
-  auto buf = out.buffer();
-  memcpy(buf.data(), hello, strlen(hello));
-  out.set_length(strlen(hello));
-}
-
-VEF_GENERATE_ENTRY_POINTS(
-  make_extension()
-    .func(make_func<&hello_world_impl>("hello_world")
-      .returns(STRING)
-      .no_params()
-      .buffer_size(14)
-      .build())
-)
+#endif  // VSQL_REST_SCHEMA_CACHE_H

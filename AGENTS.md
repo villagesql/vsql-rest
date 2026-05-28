@@ -1,243 +1,121 @@
 # AGENTS.md
 
-This file provides guidance to AI coding assistants when working with code in this repository.
+Guidance for AI coding assistants working in this repository.
 
-**Note**: Also check `AGENTS.local.md` for additional local development instructions when present.
+**Note**: Also check `AGENTS.local.md` for machine-specific paths when present.
 
 ## Project Overview
 
-This is a template project for creating VillageSQL extensions. It provides the minimum required files and structure to build, package, and install custom extensions for VillageSQL (a MySQL-compatible database). The template includes a simple "Hello, World!" function as an example.
+`vsql_rest` is a VillageSQL extension that runs an embedded HTTP/HTTPS server
+inside the database process, exposing tables as REST endpoints. It uses four
+preview VEF capabilities: `thread_worker` (background server loop),
+`sql_query` (execute SQL from that loop), `sys_var` (configuration), and
+`status_var` (observability counters).
 
-## Build System
+Install name: `vsql_rest`. Repo/directory name: `vsql-rest`.
 
-- **Build**: `cmake . && make` (or `mkdir build && cd build && cmake .. && make`)
-- **Create VEB package**: Automatically created during `make`
-- **Install extension**: `make install` (if VillageSQL_VEB_INSTALL_DIR is defined)
+## Build
 
-The build process:
-1. Uses CMake to find VillageSQL via `find_package(VillageSQL REQUIRED)`
-2. Compiles C++ source files into shared library `hello.so`
-3. Packages library with `manifest.json` into `vsql_extension_template.veb` archive using `VEF_CREATE_VEB()` macro
-4. VEB can be installed and loaded using `INSTALL EXTENSION` command
+```bash
+VillageSQL_BUILD_DIR=/path/to/villagesql/build bash build.sh
+```
 
-Set `VillageSQL_BUILD_DIR` to point to your VillageSQL build directory.
+Requires OpenSSL. On macOS:
+```bash
+cmake -S . -B build \
+  -DVillageSQL_BUILD_DIR=/path/to/build \
+  -DOPENSSL_ROOT_DIR=/opt/homebrew/opt/openssl@3
+cmake --build build
+cmake --install build
+```
+
+## Install and enable
+
+```sql
+INSTALL EXTENSION 'vsql_rest';
+SET GLOBAL vsql_rest_schema = 'mydb';
+SET GLOBAL vsql_rest_port = 3000;
+SET GLOBAL vsql_rest_enabled = ON;
+```
+
+## Run tests
+
+```bash
+cd /path/to/villagesql/build/mysql-test
+perl mysql-test-run.pl --suite=/path/to/vsql-rest/mysql-test
+perl mysql-test-run.pl --suite=/path/to/vsql-rest/mysql-test --record
+```
 
 ## Architecture
 
-**Core Components:**
-- `src/hello.cc` - VEF function implementation for the hello_world function
-- `manifest.json` - Extension metadata (name, version, description, author, license)
-- `CMakeLists.txt` - CMake build configuration
-- `cmake/FindVillageSQL.cmake` - CMake module for finding VillageSQL
-- `mysql-test/t/` - Test files directory (`.test` files using MTR framework)
-- `mysql-test/r/` - Expected test results directory (`.result` files)
+**Concurrency model**: `thread_worker` owns a single SQL session (via `sql_query`).
+Worker `std::thread`s handle TLS accept + HTTP parsing and enqueue requests onto a
+mutex-protected queue. The thread_worker drains the queue, executes SQL, and
+fulfills per-request `std::promise<Response>`. A signal pipe wakes the
+thread_worker when requests are ready.
 
-**Available Functions:**
-- `hello_world()` - Returns the string "Hello, World!"
+**`sql_query` constraint**: `SqlQueryCapability::open(handle)` is only valid
+inside `POLL_FD` and `PERIODIC` wakeup callbacks — not ENABLE (handle is NULL
+there) and not from arbitrary pthreads. The session is opened on each callback
+and closed via RAII at callback exit.
 
-**Dependencies:**
-- Requires VillageSQL (Extension Framework headers)
-- Uses VillageSQL Extension Framework (VEF) API
-- C++ compiler with C++17 support
+**SQL injection prevention**: `sql_query` executes string SQL with no parameter
+binding. All user-supplied values are escaped before interpolation. Column and
+table names are validated against the schema cache whitelist — never interpolated
+directly from request input.
 
-**Code Organization:**
-- File naming: lowercase with underscores (e.g., `hello.cc`)
-- Function naming: lowercase with underscores (e.g., `hello_world`)
-- Extension naming: lowercase with underscores (e.g., `vsql_extension_template`)
-- Variable naming: lowercase with underscores (e.g., `result`)
+## Source files
 
-## VillageSQL Extension Framework (VEF) API Pattern
+| File | Purpose |
+|---|---|
+| `src/vsql_rest.cc` | VEF entry point, capability globals, thread_worker callback |
+| `src/http_server.cc` / `.h` | TCP accept loop, connection thread dispatch |
+| `src/tls.cc` / `.h` | OpenSSL SSL_CTX init, TLS handshake, read/write wrappers |
+| `src/sql_executor.cc` / `.h` | SQL generation, escaping, result fetching |
+| `src/jwt_auth.cc` / `.h` | JWT parse, HS256/RS256 verify, claim extraction |
+| `src/json_emit.cc` / `.h` | Result rows → JSON array serialization |
+| `src/schema_cache.cc` / `.h` | INFORMATION_SCHEMA introspection, FK graph, TTL refresh |
+| `src/request_queue.cc` / `.h` | Thread-safe request/response queue + pipe signal |
+| `src/third_party/picohttpparser.h` | MIT HTTP/1.1 parser (~500 lines, header-only) |
+| `src/third_party/json.hpp` | nlohmann/json single-header for request body parsing |
 
-Extensions use the typed C++ API: include `<villagesql/vsql.h>` and
-`using namespace vsql;`. Functions use typed wrappers (`IntArg`, `StringResult`,
-etc.). Do not mix protocols in the same extension.
+## Sys vars
 
-Functions are registered using the `VEF_GENERATE_ENTRY_POINTS()` macro with a fluent builder interface.
+| Variable | Type | Default | Purpose |
+|---|---|---|---|
+| `vsql_rest_enabled` | BOOL | ON | Start/stop the server (thread_worker control var) |
+| `vsql_rest_port` | INT | 3000 | HTTP listen port |
+| `vsql_rest_ssl_port` | INT | 3443 | HTTPS listen port |
+| `vsql_rest_ssl_cert` | STR | `""` | Path to TLS cert file |
+| `vsql_rest_ssl_key` | STR | `""` | Path to TLS key file |
+| `vsql_rest_schema` | STR | `""` | Exposed database schema |
+| `vsql_rest_require_auth` | BOOL | OFF | Require JWT on all requests |
+| `vsql_rest_jwt_secret` | STR | `""` | HMAC secret for HS256 JWTs |
+| `vsql_rest_jwt_public_key` | STR | `""` | Path to RSA public key for RS256 JWTs |
+| `vsql_rest_schema_ttl` | INT | 60 | Schema cache TTL in seconds |
+| `vsql_rest_max_rows` | INT | 1000 | Default row cap when no ?limit given |
 
-### Basic Function Implementation
+## Status vars (SHOW STATUS LIKE 'vsql_rest%')
 
-Each function uses typed wrapper parameters:
+- `vsql_rest_requests_total` — total requests processed
+- `vsql_rest_connections_total` — total TCP connections accepted
+- `vsql_rest_requests_active` — requests currently queued
 
-```cpp
-#include <villagesql/vsql.h>
+## Preview APIs in use
 
-#include <cstring>
+All four are from `villagesql/preview/`. Their API and ABI may change between
+VillageSQL releases. Building requires `include-dev/` to precede `include/` in
+the compiler include path (handled by CMakeLists.txt).
 
-using namespace vsql;
+- `preview/thread_worker` — background server loop
+- `preview/sql_query` — execute SQL from thread_worker context
+- `preview/sys_var` — configuration variables
+- `preview/status_var` — observability counters
 
-// Integer result (no args)
-void my_function_impl(IntResult out) {
-    out.set(42);
-}
+## VEF API conventions
 
-// String result: write into buffer(), then call set_length()
-void my_string_impl(StringResult out) {
-    const char* value = "result";
-    auto buf = out.buffer();
-    memcpy(buf.data(), value, strlen(value));
-    out.set_length(strlen(value));
-}
-```
-
-### Function with Arguments
-
-Typed input wrappers (`IntArg`, `RealArg`, `StringArg`, `CustomArg`) provide
-`is_null()` and `value()`. List args before the result parameter:
-
-```cpp
-void my_function_impl(IntArg arg1, StringArg arg2, IntResult out) {
-    if (arg1.is_null() || arg2.is_null()) { out.set_null(); return; }
-    // arg1.value() -> int64_t
-    // arg2.value() -> std::string_view
-    out.set(arg1.value());
-}
-```
-
-### Extension Registration
-
-Use the `VEF_GENERATE_ENTRY_POINTS()` macro to register the extension and its functions:
-
-```cpp
-VEF_GENERATE_ENTRY_POINTS(
-  make_extension()
-    .func(make_func<&my_function_impl>("my_function")
-      .returns(STRING)  // or INT, REAL, UUID, etc.
-      .param(STRING)    // Add .param() for each argument
-      .buffer_size(100) // For STRING return type
-      .build())
-)
-```
-
-### Result Types
-
-Call the typed wrapper method on the result parameter:
-
-- `out.set(value)` / `out.set_length(n)` — returns a value (`VEF_RESULT_VALUE`)
-- `out.set_null()` — returns SQL NULL
-- `out.warning(msg)` — returns NULL with a SQL warning; call instead of `out.set()`, not in addition to it
-- `out.error(msg)` — aborts statement execution with an error
-
-## Testing
-
-The extension includes test files using the MySQL Test Runner (MTR) framework:
-- **Test Location**:
-  - `mysql-test/t/` directory contains `.test` files with SQL test commands
-  - `mysql-test/r/` directory contains `.result` files with expected output
-- **Run Tests**:
-  ```bash
-  cd <BUILD_DIR>/mysql-test
-  perl mysql-test-run.pl --suite=<path-to-vsql-extension-template>/mysql-test
-  ```
-  Where `<BUILD_DIR>` is your VillageSQL/MySQL build directory
-- **Create/Update Results**: Use `--record` flag to generate or update expected `.result` files:
-  ```bash
-  perl mysql-test-run.pl --suite=<path-to-test-dir> --record
-  ```
-- Tests should validate function output and behavior
-- Each test should install the extension, run tests, and clean up (drop functions, uninstall extension)
-
-## Extension Installation
-
-After building the VEB file, load the extension in VillageSQL:
-
-```sql
-INSTALL EXTENSION 'vsql_extension_template';
-```
-
-Then test the functions:
-```sql
-SELECT hello_world();
-```
-
-Note: Extension names use underscores, not hyphens (e.g., `vsql_extension_template`, not `vsql-extension-template`).
-
-## Customizing the Template
-
-To create your own extension:
-
-1. **Update `manifest.json`**:
-   - Change `name` (use underscores, e.g., `my_extension_name`)
-   - Update `description`, `author`, and `version`
-
-2. **Update `CMakeLists.txt`**:
-   - Change `EXTENSION_NAME` variable (use underscores)
-   - Update library name in `add_library()` if desired
-   - Add additional source files to `add_library()` if needed
-   - Add dependencies (e.g., `find_package(OpenSSL)`, `target_link_libraries()`)
-
-3. **Implement your functions**:
-   - Modify `src/hello.cc` or create new `.cc` files
-   - Follow the VEF API pattern (single implementation function)
-   - Use `VEF_GENERATE_ENTRY_POINTS()` to register functions
-   - Add copyright header to all new source files
-
-4. **Register functions in code**:
-   - Functions are registered using the fluent builder API in `VEF_GENERATE_ENTRY_POINTS()`
-   - Specify return type with `.returns(STRING|INT|REAL|...)`
-   - Add parameters with `.param(type)`
-   - Set buffer size for STRING returns with `.buffer_size(N)`
-   - No separate `install.sql` file is needed
-
-5. **Create tests**:
-   - Add `.test` files in `mysql-test/t/` directory
-   - Generate expected results in `mysql-test/r/` using `--record` flag
-   - Each test should install extension, test functions, and clean up
-   - Verify function behavior with various inputs
-
-## Licensing and Copyright
-
-All source code files (`.cc`, `.h`, `.cpp`, `.hpp`) and CMake files (`CMakeLists.txt`) must include the following copyright header at the top of the file:
-
-```
-/* Copyright (c) 2026 VillageSQL Contributors
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, see <https://www.gnu.org/licenses/>.
- */
-```
-
-When creating new source files, always include this copyright block before any code or includes.
-
-## Common Tasks for AI Agents
-
-When asked to add functionality to this template:
-
-1. **Adding a new function**:
-   - Create implementation function with typed wrappers: `void func_impl(IntArg a, StringResult out)` (args first, result last)
-   - Add function to `VEF_GENERATE_ENTRY_POINTS()` block using `.func(make_func<&func_impl>("name")...)`
-   - Specify return type, parameters, and buffer size
-   - Add to CMakeLists.txt if creating new source file
-   - Create tests
-
-2. **Modifying build**:
-   - Edit CMakeLists.txt, ensure proper library linking
-   - Use `target_link_libraries()` for dependencies
-
-3. **Adding dependencies**:
-   - Update CMakeLists.txt with `find_package()` or `target_link_libraries()`
-   - Example: OpenSSL requires `find_package(OpenSSL REQUIRED)` and `target_link_libraries(hello PRIVATE ${OPENSSL_LIBRARIES})`
-
-4. **Testing**:
-   - Create or update `.test` files in `mysql-test/t/` directory
-   - Generate expected results in `mysql-test/r/` using `--record`
-   - Use extension name with underscores in `INSTALL EXTENSION` commands
-
-5. **Documentation**:
-   - Update README.md to reflect new functionality
-
-**Important Conventions:**
-- Always use underscores in extension names (not hyphens)
-- Always include proper copyright headers in source files
-- Use C++17 standard
-- Functions are registered in code using VEF API (no install.sql needed)
-- Result: call `out.set(v)`, `out.set_null()`, `out.warning(msg)`, or `out.error(msg)`
+- Include `<villagesql/vsql.h>`. No `abi/` headers.
+- Typed wrappers: `StringArg`, `IntArg`, `StringResult`, `IntResult`, etc.
+- `make_extension().with(cap)` to register preview capabilities.
+- Every VDF entry point is wrapped in `try/catch (...)`.
+- Copyright header (GPL-2.0) on every `.cc`, `.h`, `CMakeLists.txt`.

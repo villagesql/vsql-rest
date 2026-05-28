@@ -14,13 +14,12 @@
 # along with this program; if not, see <https://www.gnu.org/licenses/>.
 
 cmake_minimum_required(VERSION 3.18)
-project(vsql_extension_template)
+project(vsql_rest)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Extension name
-set(EXTENSION_NAME "vsql_extension_template")
+set(EXTENSION_NAME "vsql_rest")
 
 # Find VillageSQL SDK
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
@@ -29,19 +28,42 @@ find_package(VillageSQL REQUIRED)
 message(STATUS "VillageSQL SDK found at: ${VillageSQL_PREFIX}")
 message(STATUS "VillageSQL include dir: ${VillageSQL_INCLUDE_DIR}")
 
-# Create the hello world shared library
-add_library(hello SHARED
-    src/hello.cc
+# OpenSSL — required for TLS and JWT verification
+find_package(OpenSSL REQUIRED)
+message(STATUS "OpenSSL version: ${OPENSSL_VERSION}")
+
+# Extension shared library
+add_library(vsql_rest SHARED
+    src/vsql_rest.cc
+    src/http_server.cc
+    src/tls.cc
+    src/sql_executor.cc
+    src/jwt_auth.cc
+    src/json_emit.cc
+    src/schema_cache.cc
+    src/request_queue.cc
 )
 
-# Include directories
-target_include_directories(hello PRIVATE
-    ${VillageSQLExtensionFramework_INCLUDE_DIR}
+# include-dev must come before include so preview headers take precedence
+# over older protocol headers in the stable include tree
+target_include_directories(vsql_rest PRIVATE
+    "${VillageSQL_PREFIX}/include-dev"
+    "${VillageSQLExtensionFramework_INCLUDE_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
 
-# Create the VEB package
+target_link_libraries(vsql_rest PRIVATE
+    OpenSSL::SSL
+    OpenSSL::Crypto
+)
+
+# Threads (for std::thread in accept/connection loops)
+find_package(Threads REQUIRED)
+target_link_libraries(vsql_rest PRIVATE Threads::Threads)
+
+# Build the VEB package
 VEF_CREATE_VEB(
     NAME ${EXTENSION_NAME}
-    LIBRARY_TARGET hello
+    LIBRARY_TARGET vsql_rest
     MANIFEST ${CMAKE_CURRENT_SOURCE_DIR}/manifest.json
 )
