@@ -30,6 +30,20 @@ namespace vsql_rest {
 
 // --- Utility functions ---
 
+// Map MySQL error numbers to HTTP status codes.
+// Constraint violations (FK, duplicate key) → 409 Conflict.
+// Everything else → 500 Internal Server Error.
+static int sql_errno_to_http(uint32_t mysql_errno) {
+  switch (mysql_errno) {
+    case 1062:  // ER_DUP_ENTRY — unique/primary key violation
+    case 1451:  // ER_ROW_IS_REFERENCED_2 — FK parent row referenced
+    case 1452:  // ER_NO_REFERENCED_ROW_2 — FK child row missing
+      return 409;
+    default:
+      return 500;
+  }
+}
+
 std::string url_decode(const std::string& s) {
   std::string out;
   out.reserve(s.size());
@@ -520,7 +534,7 @@ static HttpResponse handle_get(vsql::preview_sql_query::Session& session,
 
   auto result = session.sql(sql).execute();
   if (result.has_error()) {
-    resp.status = 500;
+    resp.status = sql_errno_to_http(result.error().errno_);
     resp.body = emit_error(std::string(result.error().message));
     return resp;
   }
@@ -542,6 +556,7 @@ static HttpResponse handle_get(vsql::preview_sql_query::Session& session,
 
   // Build embeddings if requested.
   std::vector<std::pair<std::string, std::vector<std::vector<Row>>>> embeddings_data;
+  std::vector<std::vector<ColInfo>> embeddings_cols;
   if (!select_spec.embeddings.empty()) {
     for (const auto& embed_name : select_spec.embeddings) {
       const auto* embed_tbl = schema_cache.get_table(embed_name);
@@ -604,6 +619,7 @@ static HttpResponse handle_get(vsql::preview_sql_query::Session& session,
         }
         all_embed_rows.push_back(std::move(child_rows));
       }
+      embeddings_cols.push_back(embed_cols);
       embeddings_data.emplace_back(embed_name, std::move(all_embed_rows));
     }
   }
@@ -647,8 +663,11 @@ static HttpResponse handle_get(vsql::preview_sql_query::Session& session,
         if (!val_opt) out += "null";
         else out += emit_col_value(*val_opt, rc.type);
       }
-      for (const auto& [embed_name, all_rows] : embeddings_data) {
+      for (size_t ei = 0; ei < embeddings_data.size(); ++ei) {
         if (!first) out += ','; first = false;
+        const auto& embed_name = embeddings_data[ei].first;
+        const auto& all_rows   = embeddings_data[ei].second;
+        const auto& ecols      = embeddings_cols[ei];
         out += '"'; out += json_escape(embed_name); out += "\":[";
         const auto& child_rows = all_rows[ri];
         for (size_t cr = 0; cr < child_rows.size(); ++cr) {
@@ -656,10 +675,15 @@ static HttpResponse handle_get(vsql::preview_sql_query::Session& session,
           out += '{';
           for (size_t cc = 0; cc < child_rows[cr].size(); ++cc) {
             if (cc > 0) out += ',';
-            out += '"'; out += json_escape(child_rows[cr][cc].first); out += "\":";
-            const auto& cval = child_rows[cr][cc].second;
-            if (!cval) out += "null";
-            else out += '"' + json_escape(*cval) + '"';
+            const auto& col_name = child_rows[cr][cc].first;
+            const auto& cval     = child_rows[cr][cc].second;
+            out += '"'; out += json_escape(col_name); out += "\":";
+            if (!cval) { out += "null"; continue; }
+            ColType ctype = ColType::TEXT;
+            for (const auto& ci : ecols) {
+              if (ci.name == col_name) { ctype = ci.type; break; }
+            }
+            out += emit_col_value(*cval, ctype);
           }
           out += '}';
         }
@@ -774,7 +798,7 @@ static HttpResponse handle_post(vsql::preview_sql_query::Session& session,
         " (" + cols_sql + ") VALUES (" + vals_sql + ")";
     auto r = session.sql(insert_sql).execute();
     if (r.has_error()) {
-      resp.status = 500;
+      resp.status = sql_errno_to_http(r.error().errno_);
       resp.body = emit_error(std::string(r.error().message));
       return resp;
     }
@@ -898,7 +922,7 @@ static HttpResponse handle_patch(vsql::preview_sql_query::Session& session,
 
   auto r = session.sql(update_sql).execute();
   if (r.has_error()) {
-    resp.status = 500;
+    resp.status = sql_errno_to_http(r.error().errno_);
     resp.body = emit_error(std::string(r.error().message));
     return resp;
   }
@@ -955,7 +979,7 @@ static HttpResponse handle_delete(vsql::preview_sql_query::Session& session,
 
   auto r = session.sql(del_sql).execute();
   if (r.has_error()) {
-    resp.status = 500;
+    resp.status = sql_errno_to_http(r.error().errno_);
     resp.body = emit_error(std::string(r.error().message));
     return resp;
   }
@@ -1003,7 +1027,7 @@ static HttpResponse handle_rpc(vsql::preview_sql_query::Session& session,
         backtick(routine_name) + "(" + args + ")";
     auto r = session.sql(call_sql).execute();
     if (r.has_error()) {
-      resp.status = 500;
+      resp.status = sql_errno_to_http(r.error().errno_);
       resp.body = emit_error(std::string(r.error().message));
       return resp;
     }
@@ -1014,7 +1038,7 @@ static HttpResponse handle_rpc(vsql::preview_sql_query::Session& session,
         backtick(routine_name) + "(" + args + ") AS result";
     auto r = session.sql(sel_sql).execute();
     if (r.has_error()) {
-      resp.status = 500;
+      resp.status = sql_errno_to_http(r.error().errno_);
       resp.body = emit_error(std::string(r.error().message));
       return resp;
     }
