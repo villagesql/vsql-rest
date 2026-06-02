@@ -11,5 +11,5 @@ jobs:
       - uses: actions/checkout@v4
       - uses: villagesql/extension-actions/cpp@main
         with:
-          extension-name: vsql_extension_template
+          extension-name: vsql_rest
           github-token: ${{ secrets.GITHUB_TOKEN }}

@@ -233,9 +233,20 @@ For production deployments, a TLS-terminating reverse proxy (nginx, Caddy) in fr
 
 9. **Extension upgrade path** — no `ALTER EXTENSION` command. Version upgrades require `UNINSTALL EXTENSION vsql_rest` then `INSTALL EXTENSION vsql_rest`. Tracked: [#12 Extension upgrades](https://github.com/villagesql/villagesql-server/issues/12) — 👍 it to signal demand.
 
+## Security Considerations
+
+- **JWT secret exposure** — `vsql_rest.jwt_secret` is visible as plaintext in `SHOW GLOBAL VARIABLES`. On shared or audited servers, use RS256 instead: set `vsql_rest.jwt_public_key` to a PEM file path. The public key path is not sensitive.
+- **TLS in production** — the built-in HTTPS listener is suitable for development and internal use. For production, a TLS-terminating reverse proxy (nginx, Caddy) in front of the plain HTTP port gives you certificate rotation, OCSP stapling, and modern cipher control without restarting the extension.
+- **SQL injection** — user-supplied values are escaped via `mysql_escape()` before interpolation. Table and column names are validated against the schema cache whitelist and never taken directly from request input. The security guarantee depends on both: if you find a bypass, please report it.
+- **Network exposure** — vsql_rest listens on all interfaces by default. In production, bind the database host to a private network or use firewall rules to restrict access to the REST port.
+
 ## Testing
 
 See [TESTING.md](TESTING.md).
+
+## Contributing
+
+See the [VillageSQL Contributing Guide](https://github.com/villagesql/villagesql-server/blob/main/CONTRIBUTING.md).
 
 ## Reporting Bugs and Requesting Features
 
