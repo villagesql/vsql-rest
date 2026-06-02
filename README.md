@@ -25,6 +25,8 @@ curl -X POST -H 'Content-Type: application/json' \
      -d '{"a":3,"b":4}' http://localhost:3000/rpc/add_numbers
 ```
 
+> **Preview extension:** `vsql_rest` uses four VEF preview APIs (`thread_worker`, `sql_query`, `sys_var`, `status_var`) that may change API or ABI between VillageSQL releases. It's suitable for development and internal tooling — expect possible breaking changes when upgrading the server.
+
 ## Building
 
 **Linux:**
@@ -227,7 +229,9 @@ For production deployments, a TLS-terminating reverse proxy (nginx, Caddy) in fr
 
 7. **CALL for result-set-returning procedures not supported** — stored procedures that use `SELECT` to return result sets cannot be called via `/rpc/`. DML procedures (INSERT/UPDATE/DELETE) work. Workaround: write stored functions returning JSON instead.
 
-8. **Extension upgrade path** — no `ALTER EXTENSION` command. Version upgrades require `UNINSTALL EXTENSION vsql_rest` then `INSTALL EXTENSION vsql_rest`.
+8. **`jwt_secret` visible as plaintext in `SHOW GLOBAL VARIABLES`** — VEF does not support masked sys vars. Avoid setting `vsql_rest.jwt_secret` on shared or audited servers; use RS256 (`jwt_public_key`) instead, since the public key path is not sensitive.
+
+9. **Extension upgrade path** — no `ALTER EXTENSION` command. Version upgrades require `UNINSTALL EXTENSION vsql_rest` then `INSTALL EXTENSION vsql_rest`. Tracked: [#12 Extension upgrades](https://github.com/villagesql/villagesql-server/issues/12) — 👍 it to signal demand.
 
 ## Testing
 
@@ -235,12 +239,12 @@ See [TESTING.md](TESTING.md).
 
 ## Reporting Bugs and Requesting Features
 
-Open an issue at [github.com/villagesql/villagesql-server/issues](https://github.com/villagesql/villagesql-server/issues).
+Open an issue at [github.com/villagesql/vsql-rest/issues](https://github.com/villagesql/vsql-rest/issues).
 
 ## Contact
 
 - Discord: [discord.gg/KSr6whd3Fr](https://discord.gg/KSr6whd3Fr)
-- GitHub Issues: [github.com/villagesql/villagesql-server/issues](https://github.com/villagesql/villagesql-server/issues)
+- GitHub Issues: [github.com/villagesql/vsql-rest/issues](https://github.com/villagesql/vsql-rest/issues)
 
 ## License
 

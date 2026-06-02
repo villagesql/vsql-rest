@@ -32,18 +32,23 @@ cmake --install build
 ## Install and enable
 
 ```sql
-INSTALL EXTENSION 'vsql_rest';
-SET GLOBAL vsql_rest_schema = 'mydb';
-SET GLOBAL vsql_rest_port = 3000;
-SET GLOBAL vsql_rest_enabled = ON;
+INSTALL EXTENSION vsql_rest;
+SET GLOBAL vsql_rest.schema = 'mydb';
+SET GLOBAL vsql_rest.port = 3000;
+SET GLOBAL vsql_rest.vsql_rest_enabled = ON;
 ```
 
 ## Run tests
 
 ```bash
 cd /path/to/villagesql/build/mysql-test
-perl mysql-test-run.pl --suite=/path/to/vsql-rest/mysql-test
-perl mysql-test-run.pl --suite=/path/to/vsql-rest/mysql-test --record
+perl mysql-test-run.pl \
+  --suite=/path/to/vsql-rest/mysql-test \
+  --mysqld=--vsql_allow_preview_extensions=ON
+perl mysql-test-run.pl \
+  --suite=/path/to/vsql-rest/mysql-test \
+  --mysqld=--vsql_allow_preview_extensions=ON \
+  --record
 ```
 
 ## Architecture
@@ -83,23 +88,23 @@ directly from request input.
 
 | Variable | Type | Default | Purpose |
 |---|---|---|---|
-| `vsql_rest_enabled` | BOOL | ON | Start/stop the server (thread_worker control var) |
-| `vsql_rest_port` | INT | 3000 | HTTP listen port |
-| `vsql_rest_ssl_port` | INT | 3443 | HTTPS listen port |
-| `vsql_rest_ssl_cert` | STR | `""` | Path to TLS cert file |
-| `vsql_rest_ssl_key` | STR | `""` | Path to TLS key file |
-| `vsql_rest_schema` | STR | `""` | Exposed database schema |
-| `vsql_rest_require_auth` | BOOL | OFF | Require JWT on all requests |
-| `vsql_rest_jwt_secret` | STR | `""` | HMAC secret for HS256 JWTs |
-| `vsql_rest_jwt_public_key` | STR | `""` | Path to RSA public key for RS256 JWTs |
-| `vsql_rest_schema_ttl` | INT | 60 | Schema cache TTL in seconds |
-| `vsql_rest_max_rows` | INT | 1000 | Default row cap when no ?limit given |
+| `vsql_rest.vsql_rest_enabled` | BOOL | ON | Start/stop the server (thread_worker control var) |
+| `vsql_rest.port` | INT | 3000 | HTTP listen port |
+| `vsql_rest.ssl_port` | INT | 3443 | HTTPS listen port |
+| `vsql_rest.ssl_cert` | STR | `""` | Path to TLS cert file |
+| `vsql_rest.ssl_key` | STR | `""` | Path to TLS key file |
+| `vsql_rest.schema` | STR | `""` | Exposed database schema |
+| `vsql_rest.require_auth` | BOOL | OFF | Require JWT on all requests |
+| `vsql_rest.jwt_secret` | STR | `""` | HMAC secret for HS256 JWTs |
+| `vsql_rest.jwt_public_key` | STR | `""` | Path to RSA public key for RS256 JWTs |
+| `vsql_rest.schema_ttl` | INT | 60 | Schema cache TTL in seconds |
+| `vsql_rest.max_rows` | INT | 1000 | Default row cap when no ?limit given |
 
 ## Status vars (SHOW STATUS LIKE 'vsql_rest%')
 
-- `vsql_rest_requests_total` — total requests processed
-- `vsql_rest_connections_total` — total TCP connections accepted
-- `vsql_rest_requests_active` — requests currently queued
+- `vsql_rest.requests_total` — total requests processed
+- `vsql_rest.connections_total` — total TCP connections accepted
+- `vsql_rest.requests_active` — requests currently queued
 
 ## Preview APIs in use
 
