@@ -396,7 +396,8 @@ static HttpResponse handle_get(vsql::preview_sql_query::Session& session,
                                 const TableInfo& table_info,
                                 long long max_rows,
                                 bool count_exact,
-                                SchemaCache& schema_cache) {
+                                SchemaCache& schema_cache,
+                                const std::unordered_set<std::string>& allowed_tables) {
   HttpResponse resp;
   auto params = parse_query_string(raw_query);
 
@@ -559,6 +560,7 @@ static HttpResponse handle_get(vsql::preview_sql_query::Session& session,
   std::vector<std::vector<ColInfo>> embeddings_cols;
   if (!select_spec.embeddings.empty()) {
     for (const auto& embed_name : select_spec.embeddings) {
+      if (!allowed_tables.empty() && allowed_tables.count(embed_name) == 0) continue;
       const auto* embed_tbl = schema_cache.get_table(embed_name);
       if (!embed_tbl) continue;
 
@@ -1118,6 +1120,7 @@ HttpResponse execute_request(vsql::preview_sql_query::Session& session,
                              bool require_auth,
                              long long max_rows,
                              const std::unordered_set<std::string>& allowed_tables,
+                             const std::unordered_set<std::string>& allowed_routines,
                              const std::unordered_map<std::string,
                                std::unordered_set<std::string>>& table_methods) {
   HttpResponse resp;
@@ -1190,6 +1193,11 @@ HttpResponse execute_request(vsql::preview_sql_query::Session& session,
   if (req.method == "POST" && path.size() > 5 &&
       path.compare(0, 5, "/rpc/") == 0) {
     std::string rname = path.substr(5);
+    if (!allowed_routines.empty() && allowed_routines.count(rname) == 0) {
+      resp.status = 404;
+      resp.body = emit_error("routine not found: " + rname);
+      return resp;
+    }
     const auto* ri = schema.get_routine(rname);
     if (!ri) {
       resp.status = 404;
@@ -1242,7 +1250,7 @@ HttpResponse execute_request(vsql::preview_sql_query::Session& session,
 
   if (req.method == "GET") {
     auto r = handle_get(session, table_name, req.raw_query, schema_name,
-                        *tbl, max_rows, count_exact, schema);
+                        *tbl, max_rows, count_exact, schema, allowed_tables);
     return r;
   } else if (req.method == "POST") {
     return handle_post(session, table_name, req.body, schema_name, *tbl,

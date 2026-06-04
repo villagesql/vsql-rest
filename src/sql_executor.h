@@ -49,9 +49,10 @@ std::vector<std::pair<std::string, std::string>> parse_query_string(
 // Sets JWT user variables, validates table/column names against the schema
 // cache, generates and executes SQL, and returns a filled HttpResponse.
 //
-// allowed_tables: if non-empty, only listed tables are reachable (others → 404).
-// table_methods:  if non-empty, per-table HTTP method restrictions (table → set of
-//                 allowed methods); tables not in the map are unrestricted.
+// allowed_tables:   if non-empty, only listed tables are reachable (others → 404).
+// allowed_routines: if non-empty, only listed routine names are callable via /rpc/.
+// table_methods:    if non-empty, per-table HTTP method restrictions (table → set of
+//                   allowed methods); tables not in the map are unrestricted.
 HttpResponse execute_request(vsql::preview_sql_query::Session& session,
                              const HttpRequest& req,
                              const std::string& schema_name,
@@ -61,6 +62,7 @@ HttpResponse execute_request(vsql::preview_sql_query::Session& session,
                              bool require_auth,
                              long long max_rows,
                              const std::unordered_set<std::string>& allowed_tables,
+                             const std::unordered_set<std::string>& allowed_routines,
                              const std::unordered_map<std::string,
                                std::unordered_set<std::string>>& table_methods);
 

@@ -52,8 +52,9 @@ static char*     g_jwt_secret  = nullptr;
 static char*     g_jwt_pubkey  = nullptr;
 static long long g_schema_ttl       = 60;
 static long long g_max_rows         = 1000;
-static char*     g_allowed_tables   = nullptr;
-static char*     g_table_methods    = nullptr;
+static char*     g_allowed_tables    = nullptr;
+static char*     g_allowed_routines  = nullptr;
+static char*     g_table_methods     = nullptr;
 
 // Status var backing storage. Written by the extension.
 static long long g_requests_total     = 0;
@@ -94,8 +95,9 @@ static auto g_sys_vars = syv::make_capability({
   syv::make_str ("jwt_public_key", "RSA public key path (RS256)",&g_jwt_pubkey,   ""),
   syv::make_int ("schema_ttl",     "Schema cache TTL (seconds)", &g_schema_ttl,   60, 1, 86400),
   syv::make_int ("max_rows",       "Default row limit",          &g_max_rows,    1000, 1, 1000000),
-  syv::make_str ("allowed_tables", "Comma-separated table allowlist (empty = all)", &g_allowed_tables, ""),
-  syv::make_str ("table_methods",  "Per-table method restrictions: tbl:GET,POST|tbl2:GET", &g_table_methods, ""),
+  syv::make_str ("allowed_tables",   "Comma-separated table allowlist (empty = all)",    &g_allowed_tables,   ""),
+  syv::make_str ("allowed_routines", "Comma-separated routine allowlist (empty = all)",  &g_allowed_routines, ""),
+  syv::make_str ("table_methods",    "Per-table method restrictions: tbl:GET,POST|tbl2:GET", &g_table_methods, ""),
 });
 
 static auto g_status_vars = stv::make_capability({
@@ -108,16 +110,20 @@ static auto g_status_vars = stv::make_capability({
 // Access-control config parsers
 // ============================================================================
 
+static std::string trim_token(const std::string& s) {
+  auto start = s.find_first_not_of(' ');
+  if (start == std::string::npos) return {};
+  return s.substr(start, s.find_last_not_of(' ') - start + 1);
+}
+
 static std::unordered_set<std::string> parse_allowed_tables(const char* sv) {
   std::unordered_set<std::string> result;
   if (!sv || !*sv) return result;
   std::istringstream ss(sv);
   std::string tok;
   while (std::getline(ss, tok, ',')) {
-    auto s = tok.find_first_not_of(' ');
-    if (s == std::string::npos) continue;
-    auto e = tok.find_last_not_of(' ');
-    result.insert(tok.substr(s, e - s + 1));
+    auto t = trim_token(tok);
+    if (!t.empty()) result.insert(std::move(t));
   }
   return result;
 }
@@ -132,19 +138,18 @@ parse_table_methods(const char* sv) {
   while (std::getline(pipes, entry, '|')) {
     auto colon = entry.find(':');
     if (colon == std::string::npos) continue;
-    std::string table = entry.substr(0, colon);
+    std::string table = trim_token(entry.substr(0, colon));
+    if (table.empty()) continue;
     std::unordered_set<std::string> methods;
     std::istringstream ms(entry.substr(colon + 1));
     std::string m;
     while (std::getline(ms, m, ',')) {
-      auto s = m.find_first_not_of(' ');
-      if (s == std::string::npos) continue;
-      auto e = m.find_last_not_of(' ');
-      std::string meth = m.substr(s, e - s + 1);
+      std::string meth = trim_token(m);
+      if (meth.empty()) continue;
       for (char& c : meth) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
       methods.insert(meth);
     }
-    if (!methods.empty()) result[table] = std::move(methods);
+    if (!methods.empty()) result[std::move(table)] = std::move(methods);
   }
   return result;
 }
@@ -210,8 +215,9 @@ static vef_next_wakeup_t rest_worker(vef_wakeup_reason_t reason,
                                        static_cast<int>(g_schema_ttl));
 
       // Parse access-control config once per wakeup (cheap; may change via SET GLOBAL).
-      auto allowed_tables = parse_allowed_tables(g_allowed_tables);
-      auto table_methods  = parse_table_methods(g_table_methods);
+      auto allowed_tables   = parse_allowed_tables(g_allowed_tables);
+      auto allowed_routines = parse_allowed_tables(g_allowed_routines);
+      auto table_methods    = parse_table_methods(g_table_methods);
 
       // Drain and process all queued requests.
       auto pending = g_queue->drain();
@@ -227,6 +233,7 @@ static vef_next_wakeup_t rest_worker(vef_wakeup_reason_t reason,
             g_require_auth,
             g_max_rows,
             allowed_tables,
+            allowed_routines,
             table_methods);
         --g_requests_active;
 

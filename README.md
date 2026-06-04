@@ -66,6 +66,9 @@ Then configure via `SET GLOBAL`:
 | `vsql_rest.jwt_public_key` | `""` | RSA public key path for RS256 tokens |
 | `vsql_rest.schema_ttl` | 60 | Schema cache TTL in seconds |
 | `vsql_rest.max_rows` | 1000 | Default row cap when no `?limit` |
+| `vsql_rest.allowed_tables` | `""` | Comma-separated table allowlist; empty means all tables are accessible |
+| `vsql_rest.allowed_routines` | `""` | Comma-separated routine allowlist; empty means all routines are callable |
+| `vsql_rest.table_methods` | `""` | Per-table HTTP method restrictions — format: `tbl:GET,POST\|tbl2:GET` |
 
 Observability (via `SHOW STATUS LIKE 'vsql_rest%'`):
 
@@ -198,6 +201,45 @@ CREATE VIEW my_view AS
   SELECT * FROM customers WHERE email = vsql_rest_jwt_sub();
 ```
 
+## Access Control
+
+vsql_rest executes all queries through an internal session — MySQL's `GRANT`/`REVOKE` system doesn't restrict what it can read or write. Three sys vars let you lock down the exposed surface without touching JWT or view configuration.
+
+**Table allowlist** — expose only the tables you intend to:
+
+```sql
+SET GLOBAL vsql_rest.allowed_tables = 'orders,customers';
+```
+
+Tables not in the list return `404`. The API discovery endpoint (`GET /`) also filters to the allowlist. Empty string (the default) allows all tables in the schema.
+
+**Routine allowlist** — restrict which stored procedures and functions are callable via `/rpc/`:
+
+```sql
+SET GLOBAL vsql_rest.allowed_routines = 'add_numbers,mark_shipped';
+```
+
+Routines not in the list return `404`. Empty string allows all routines.
+
+**Per-table method restrictions** — make specific tables read-only (or write-only):
+
+```sql
+-- customers: read-only. orders: read and create only.
+SET GLOBAL vsql_rest.table_methods = 'customers:GET|orders:GET,POST';
+```
+
+Blocked methods return `405`. Tables absent from this config are unrestricted. The format is pipe-separated `table:METHOD,METHOD` entries; method names are case-insensitive.
+
+All three vars take effect on the next request cycle (~50ms) with no restart. They can be combined:
+
+```sql
+SET GLOBAL vsql_rest.allowed_tables   = 'orders,customers';
+SET GLOBAL vsql_rest.allowed_routines = 'get_summary';
+SET GLOBAL vsql_rest.table_methods    = 'customers:GET|orders:GET,POST';
+```
+
+Note: `allowed_tables` also prevents FK-embedded related tables from being fetched in `?select=*,related(*)` queries. If `related` isn't in the allowlist, that embedding is silently skipped rather than returning an error.
+
 ## HTTPS
 
 Set `ssl_cert` and `ssl_key` to enable HTTPS. Both HTTP and HTTPS listeners run simultaneously on their respective ports.
@@ -235,6 +277,7 @@ For production deployments, a TLS-terminating reverse proxy (nginx, Caddy) in fr
 
 ## Security Considerations
 
+- **MySQL grants are bypassed** — vsql_rest executes queries through an internal session; `GRANT`/`REVOKE` have no effect on what the REST API can read or write. Use `allowed_tables`, `allowed_routines`, and `table_methods` to restrict the exposed surface, and JWT + view-based row filtering for per-caller access control. See [Access Control](#access-control).
 - **JWT secret exposure** — `vsql_rest.jwt_secret` is visible as plaintext in `SHOW GLOBAL VARIABLES`. On shared or audited servers, use RS256 instead: set `vsql_rest.jwt_public_key` to a PEM file path. The public key path is not sensitive.
 - **TLS in production** — the built-in HTTPS listener is suitable for development and internal use. For production, a TLS-terminating reverse proxy (nginx, Caddy) in front of the plain HTTP port gives you certificate rotation, OCSP stapling, and modern cipher control without restarting the extension.
 - **SQL injection** — user-supplied values are escaped via `mysql_escape()` before interpolation. Table and column names are validated against the schema cache whitelist and never taken directly from request input. The security guarantee depends on both: if you find a bypass, please report it.
