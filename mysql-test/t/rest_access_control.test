@@ -1,0 +1,96 @@
+--source rest_setup.inc
+
+# ============================================================
+# allowed_tables: restrict which tables are reachable
+# ============================================================
+
+# Default: all tables reachable.
+--exec curl -s -o /dev/null -w "%{http_code}" "http://localhost:18080/customers"
+--echo ""
+--exec curl -s -o /dev/null -w "%{http_code}" "http://localhost:18080/orders"
+--echo ""
+
+# Restrict to customers only.
+SET GLOBAL vsql_rest.allowed_tables = 'customers';
+--sleep 0.2
+
+# customers is still reachable.
+--exec curl -s -o /dev/null -w "%{http_code}" "http://localhost:18080/customers"
+--echo ""
+
+# orders returns 404 (not leaked).
+--exec curl -s -o /dev/null -w "%{http_code}" "http://localhost:18080/orders"
+--echo ""
+--exec curl -s "http://localhost:18080/orders" | python3 -c "import sys,json; d=json.load(sys.stdin); print('message' in d)"
+
+# Discovery only lists allowed tables.
+--exec curl -s "http://localhost:18080/" | python3 -c "import sys,json; d=json.load(sys.stdin); tables=list(d['definitions'].keys()); print('customers' in tables, 'orders' in tables)"
+
+# Reset allowlist.
+SET GLOBAL vsql_rest.allowed_tables = '';
+--sleep 0.2
+
+# orders is reachable again.
+--exec curl -s -o /dev/null -w "%{http_code}" "http://localhost:18080/orders"
+--echo ""
+
+# ============================================================
+# table_methods: restrict HTTP methods per table
+# ============================================================
+
+# customers: GET only. orders: GET and POST.
+SET GLOBAL vsql_rest.table_methods = 'customers:GET|orders:GET,POST';
+--sleep 0.2
+
+# Allowed methods succeed.
+--exec curl -s -o /dev/null -w "%{http_code}" "http://localhost:18080/customers"
+--echo ""
+--exec curl -s -o /dev/null -w "%{http_code}" "http://localhost:18080/orders"
+--echo ""
+
+# POST to customers → 405.
+--exec curl -s -o /dev/null -w "%{http_code}" -X POST -H "Content-Type: application/json" -d '{"name":"Dave","email":"dave@example.com","age":30}' "http://localhost:18080/customers"
+--echo ""
+--exec curl -s -X POST -H "Content-Type: application/json" -d '{"name":"Dave","email":"dave@example.com","age":30}' "http://localhost:18080/customers" | python3 -c "import sys,json; d=json.load(sys.stdin); print('message' in d)"
+
+# DELETE on orders → 405 (not in the allowed set).
+--exec curl -s -o /dev/null -w "%{http_code}" -X DELETE "http://localhost:18080/orders?id=eq.1"
+--echo ""
+
+# POST to orders is allowed (GET,POST).
+--exec curl -s -o /dev/null -w "%{http_code}" -X POST -H "Content-Type: application/json" -d '{"customer_id":1,"total":10.00,"status":"pending"}' "http://localhost:18080/orders"
+--echo ""
+
+# Reset method restrictions.
+SET GLOBAL vsql_rest.table_methods = '';
+--sleep 0.2
+
+# POST to customers allowed again.
+--exec curl -s -o /dev/null -w "%{http_code}" -X POST -H "Content-Type: application/json" -d '{"name":"Dave","email":"dave@example.com","age":30}' "http://localhost:18080/customers"
+--echo ""
+
+# ============================================================
+# Combined: allowlist + method restrictions
+# ============================================================
+
+SET GLOBAL vsql_rest.allowed_tables = 'customers';
+SET GLOBAL vsql_rest.table_methods = 'customers:GET';
+--sleep 0.2
+
+# orders not in allowlist → 404.
+--exec curl -s -o /dev/null -w "%{http_code}" "http://localhost:18080/orders"
+--echo ""
+
+# customers GET allowed.
+--exec curl -s -o /dev/null -w "%{http_code}" "http://localhost:18080/customers"
+--echo ""
+
+# customers POST blocked by method restriction → 405.
+--exec curl -s -o /dev/null -w "%{http_code}" -X POST -H "Content-Type: application/json" -d '{"name":"Eve","email":"eve@example.com","age":22}' "http://localhost:18080/customers"
+--echo ""
+
+# Reset.
+SET GLOBAL vsql_rest.allowed_tables = '';
+SET GLOBAL vsql_rest.table_methods = '';
+
+--source rest_teardown.inc

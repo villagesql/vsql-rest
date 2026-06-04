@@ -1056,12 +1056,20 @@ static HttpResponse handle_rpc(vsql::preview_sql_query::Session& session,
 
 // --- API discovery ---
 
-static HttpResponse handle_discovery(const std::string& schema_name,
-                                     SchemaCache& schema) {
+static HttpResponse handle_discovery(
+    const std::string& schema_name,
+    SchemaCache& schema,
+    const std::unordered_set<std::string>& allowed_tables) {
   HttpResponse resp;
   resp.headers.emplace_back("Content-Type", "application/json");
 
   auto names = schema.table_names();
+  if (!allowed_tables.empty()) {
+    names.erase(
+        std::remove_if(names.begin(), names.end(),
+            [&](const std::string& n) { return allowed_tables.count(n) == 0; }),
+        names.end());
+  }
   std::string out;
   out.reserve(512);
   out += "{\"definitions\":{";
@@ -1108,7 +1116,10 @@ HttpResponse execute_request(vsql::preview_sql_query::Session& session,
                              const std::string& jwt_secret,
                              const std::string& jwt_pubkey_path,
                              bool require_auth,
-                             long long max_rows) {
+                             long long max_rows,
+                             const std::unordered_set<std::string>& allowed_tables,
+                             const std::unordered_map<std::string,
+                               std::unordered_set<std::string>>& table_methods) {
   HttpResponse resp;
   resp.headers.emplace_back("Content-Type", "application/json");
 
@@ -1172,7 +1183,7 @@ HttpResponse execute_request(vsql::preview_sql_query::Session& session,
 
   // GET /
   if (path == "/" || path.empty()) {
-    return handle_discovery(schema_name, schema);
+    return handle_discovery(schema_name, schema, allowed_tables);
   }
 
   // POST /rpc/routine_name
@@ -1202,6 +1213,24 @@ HttpResponse execute_request(vsql::preview_sql_query::Session& session,
     resp.status = 404;
     resp.body = emit_error("table not found: " + table_name);
     return resp;
+  }
+
+  // Allowlist check: treat unlisted tables as not found (avoids leaking names).
+  if (!allowed_tables.empty() && allowed_tables.count(table_name) == 0) {
+    resp.status = 404;
+    resp.body = emit_error("table not found: " + table_name);
+    return resp;
+  }
+
+  // Per-table method restriction.
+  if (!table_methods.empty()) {
+    auto mit = table_methods.find(table_name);
+    if (mit != table_methods.end() &&
+        mit->second.count(req.method) == 0) {
+      resp.status = 405;
+      resp.body = emit_error("method not allowed: " + req.method);
+      return resp;
+    }
   }
 
   const auto* tbl = schema.get_table(table_name);
