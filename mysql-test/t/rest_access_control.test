@@ -93,4 +93,33 @@ SET GLOBAL vsql_rest.table_methods = 'customers:GET';
 SET GLOBAL vsql_rest.allowed_tables = '';
 SET GLOBAL vsql_rest.table_methods = '';
 
+# ============================================================
+# allowed_routines: restrict which /rpc/ endpoints are callable
+# ============================================================
+
+# Default: all routines callable.
+--exec curl -s -o /dev/null -w "%{http_code}" -X POST -H "Content-Type: application/json" -d '{"a":3,"b":4}' "http://localhost:18080/rpc/add_numbers"
+--echo ""
+
+# Restrict to add_numbers only — mark_shipped is blocked.
+SET GLOBAL vsql_rest.allowed_routines = 'add_numbers';
+--sleep 0.2
+
+# add_numbers is still callable.
+--exec curl -s -o /dev/null -w "%{http_code}" -X POST -H "Content-Type: application/json" -d '{"a":3,"b":4}' "http://localhost:18080/rpc/add_numbers"
+--echo ""
+
+# mark_shipped returns 404 (not leaked).
+--exec curl -s -o /dev/null -w "%{http_code}" -X POST -H "Content-Type: application/json" -d '{"order_id":1}' "http://localhost:18080/rpc/mark_shipped"
+--echo ""
+--exec curl -s -X POST -H "Content-Type: application/json" -d '{"order_id":1}' "http://localhost:18080/rpc/mark_shipped" | python3 -c "import sys,json; d=json.load(sys.stdin); print('message' in d)"
+
+# Reset.
+SET GLOBAL vsql_rest.allowed_routines = '';
+--sleep 0.2
+
+# mark_shipped callable again.
+--exec curl -s -o /dev/null -w "%{http_code}" -X POST -H "Content-Type: application/json" -d '{"order_id":1}' "http://localhost:18080/rpc/mark_shipped"
+--echo ""
+
 --source rest_teardown.inc

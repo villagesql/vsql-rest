@@ -55,6 +55,13 @@ SET GLOBAL vsql_rest.table_methods = 'customers:GET';
 405""
 SET GLOBAL vsql_rest.allowed_tables = '';
 SET GLOBAL vsql_rest.table_methods = '';
+200""
+SET GLOBAL vsql_rest.allowed_routines = 'add_numbers';
+200""
+404""
+True
+SET GLOBAL vsql_rest.allowed_routines = '';
+200""
 SET GLOBAL vsql_rest.vsql_rest_enabled = OFF;
 UNINSTALL EXTENSION vsql_rest;
 DROP DATABASE IF EXISTS test_rest;
