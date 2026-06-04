@@ -25,7 +25,7 @@ curl -X POST -H 'Content-Type: application/json' \
      -d '{"a":3,"b":4}' http://localhost:3000/rpc/add_numbers
 ```
 
-> **Preview extension:** `vsql_rest` uses four VEF preview APIs (`thread_worker`, `sql_query`, `sys_var`, `status_var`) that may change API or ABI between VillageSQL releases. It's suitable for development and internal tooling — expect possible breaking changes when upgrading the server.
+> **Preview APIs:** `vsql_rest` uses four VEF preview APIs (`thread_worker`, `sql_query`, `sys_var`, `status_var`) that may change API or ABI between VillageSQL releases. It's suitable for development and internal tooling — expect possible breaking changes when upgrading the server.
 
 ## Building
 
