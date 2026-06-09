@@ -213,7 +213,8 @@ static void handle_connection(Conn& conn, RequestQueue* queue) {
     // and abort the mysqld process — catch it and return a graceful 503.
     try {
       resp = future.get();
-    } catch (...) {
+    } catch (const std::exception& e) {
+      fprintf(stderr, "vsql_rest: request future failed: %s\n", e.what());
       resp.status = 503;
       resp.body = "{\"message\":\"server shutting down\",\"details\":null,"
                   "\"hint\":null,\"code\":\"VSQL0003\"}";
