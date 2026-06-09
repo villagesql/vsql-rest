@@ -207,7 +207,18 @@ static void handle_connection(Conn& conn, RequestQueue* queue) {
   auto status = future.wait_for(std::chrono::seconds(30));
   HttpResponse resp;
   if (status == std::future_status::ready) {
-    resp = future.get();
+    // future.get() throws if the queue was destroyed during shutdown
+    // (RequestQueue's destructor sets an exception on pending promises).
+    // An uncaught throw in this detached thread would call std::terminate
+    // and abort the mysqld process — catch it and return a graceful 503.
+    try {
+      resp = future.get();
+    } catch (...) {
+      resp.status = 503;
+      resp.body = "{\"message\":\"server shutting down\",\"details\":null,"
+                  "\"hint\":null,\"code\":\"VSQL0003\"}";
+      resp.headers.emplace_back("Content-Type", "application/json");
+    }
   } else {
     resp.status = 503;
     resp.body = "{\"message\":\"request timed out\",\"details\":null,"
