@@ -13,7 +13,18 @@ SET GLOBAL vsql_rest.ssl_key  = '/tmp/vsql_rest_test.key';
 SET GLOBAL vsql_rest.vsql_rest_enabled = OFF;
 --sleep 0.5
 SET GLOBAL vsql_rest.vsql_rest_enabled = ON;
---sleep 1.5
+# Poll until HTTPS listener is ready (TLS startup takes longer than plain HTTP, especially under CI load).
+--perl
+use strict;
+my $ssl_port = '$REST_SSL_PORT';
+print STDERR "Waiting for HTTPS listener on port $ssl_port...\n";
+for (1..20) {
+    sleep(1);
+    my $resp = `curl -sk -o /dev/null -w "%{http_code}" "https://localhost:$ssl_port/customers" 2>/dev/null`;
+    chomp $resp;
+    last if $resp eq '200';
+}
+EOF
 
 # C41: HTTPS responds 200 (self-signed, skip verify with -k).
 --exec curl -sk -o /dev/null -w "%{http_code}" "https://localhost:$REST_SSL_PORT/customers"
