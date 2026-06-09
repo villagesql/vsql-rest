@@ -31,7 +31,7 @@ BEGIN
 END//
 delimiter ;//
 
-SET GLOBAL vsql_allow_preview_extensions = ON;
+SET PERSIST vsql_allow_preview_extensions = ON;
 INSTALL EXTENSION vsql_rest;
 SET GLOBAL vsql_rest.port = 18080;
 SET GLOBAL vsql_rest.schema = 'test_rest';
