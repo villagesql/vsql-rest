@@ -1,0 +1,9 @@
+# Sanity: no vsql_rest, just confirm MTR can run a test in parallel mode.
+# Intentionally fails so MTR triggers the composite action's artifact upload.
+--echo DIAG: sanity start
+SELECT 1 AS one;
+--let $PREVIEW = `SELECT @@vsql_allow_preview_extensions`
+--let $PORT = `SELECT @@port`
+--echo DIAG: preview=$PREVIEW port=$PORT
+--echo DIAG: about to fail intentionally
+SELECT * FROM intentionally_missing_table_to_force_failure;
