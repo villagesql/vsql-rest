@@ -31,22 +31,15 @@ BEGIN
 END//
 delimiter ;//
 
-# DIAG: probe state at each step to localize CI hang.
---echo DIAG: before INSTALL preview=`SELECT @@vsql_allow_preview_extensions` port=`SELECT @@port`
 INSTALL EXTENSION vsql_rest;
---echo DIAG: after INSTALL
 --disable_query_log
 --let $REST_PORT = `SELECT @@port + 100`
 --let $REST_SSL_PORT = `SELECT @@port + 200`
 --eval SET GLOBAL vsql_rest.port = $REST_PORT
 --enable_query_log
---echo DIAG: after set port
 SET GLOBAL vsql_rest.schema = 'test_rest';
 SET GLOBAL vsql_rest.schema_ttl = 2;
---echo DIAG: before enable
 SET GLOBAL vsql_rest.vsql_rest_enabled = ON;
---echo DIAG: after enable
 
 # Wait for server to start
 --sleep 1.5
---echo DIAG: after sleep
