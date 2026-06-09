@@ -7,18 +7,20 @@
 
 SET GLOBAL vsql_rest.ssl_cert = '/tmp/vsql_rest_test.crt';
 SET GLOBAL vsql_rest.ssl_key  = '/tmp/vsql_rest_test.key';
-SET GLOBAL vsql_rest.ssl_port = 18443;
+--disable_query_log
+--eval SET GLOBAL vsql_rest.ssl_port = $REST_SSL_PORT
+--enable_query_log
 SET GLOBAL vsql_rest.vsql_rest_enabled = OFF;
 --sleep 0.5
 SET GLOBAL vsql_rest.vsql_rest_enabled = ON;
 --sleep 1.5
 
 # C41: HTTPS responds 200 (self-signed, skip verify with -k).
---exec curl -sk -o /dev/null -w "%{http_code}" "https://localhost:18443/customers"
+--exec curl -sk -o /dev/null -w "%{http_code}" "https://localhost:$REST_SSL_PORT/customers"
 --echo ""
 
 # C42: HTTP still responds 200 with both listeners active.
---exec curl -s -o /dev/null -w "%{http_code}" "http://localhost:18080/customers"
+--exec curl -s -o /dev/null -w "%{http_code}" "http://localhost:$REST_PORT/customers"
 --echo ""
 
 SET GLOBAL vsql_rest.ssl_cert = '';

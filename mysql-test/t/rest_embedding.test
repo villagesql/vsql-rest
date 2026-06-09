@@ -1,9 +1,9 @@
 --source rest_setup.inc
 
 # C25: Forward embed (customers → orders via reverse FK).
---exec curl -s "http://localhost:18080/customers?select=id,name,orders(*)" | python3 -c "import sys,json; d=json.load(sys.stdin); d.sort(key=lambda r:r['id']); [print(r['name'],len(r.get('orders',[]))) for r in d]"
+--exec curl -s "http://localhost:$REST_PORT/customers?select=id,name,orders(*)" | python3 -c "import sys,json; d=json.load(sys.stdin); d.sort(key=lambda r:r['id']); [print(r['name'],len(r.get('orders',[]))) for r in d]"
 
 # C26: Reverse embed (orders → customers via forward FK).
---exec curl -s "http://localhost:18080/orders?select=id,total,customers(name,email)" | python3 -c "import sys,json; d=json.load(sys.stdin); d.sort(key=lambda r:r['id']); r=d[0]; custs=r.get('customers',[]); has_fields=isinstance(custs,list) and len(custs)>0 and 'name' in custs[0] and 'email' in custs[0]; print('customers key present:','customers' in r); print('name+email present:',has_fields)"
+--exec curl -s "http://localhost:$REST_PORT/orders?select=id,total,customers(name,email)" | python3 -c "import sys,json; d=json.load(sys.stdin); d.sort(key=lambda r:r['id']); r=d[0]; custs=r.get('customers',[]); has_fields=isinstance(custs,list) and len(custs)>0 and 'name' in custs[0] and 'email' in custs[0]; print('customers key present:','customers' in r); print('name+email present:',has_fields)"
 
 --source rest_teardown.inc
