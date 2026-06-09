@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Helper for rest_auth.test: generate HS256 JWT tokens and make curl requests."""
-import base64, hmac, hashlib, json, time, subprocess, sys
+import base64, hmac, hashlib, json, os, time, subprocess, sys
 
 SECRET = "test-secret-key"
-BASE = "http://localhost:18080"
+PORT = os.environ.get("REST_PORT", "18080")
+BASE = f"http://localhost:{PORT}"
 
 def b64url(d):
     if isinstance(d, str): d = d.encode()
