@@ -28,6 +28,7 @@
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
+#include <sys/socket.h>
 #include <unistd.h>
 
 #include "http_server.h"
@@ -250,11 +251,18 @@ static vef_next_wakeup_t rest_worker(vef_wakeup_reason_t reason,
       // Signal accept threads to stop, close sockets.
       g_running.store(false, std::memory_order_relaxed);
 
+      // shutdown() before close() so accept() returns immediately on Linux.
+      // close() alone does not wake a thread blocked in accept() on the same
+      // fd — the call keeps blocking and the subsequent join() hangs forever.
+      // macOS happens to wake on close, which is why this only surfaces on
+      // Linux runners.
       if (g_listen_fd >= 0) {
+        shutdown(g_listen_fd, SHUT_RDWR);
         close(g_listen_fd);
         g_listen_fd = -1;
       }
       if (g_ssl_listen_fd >= 0) {
+        shutdown(g_ssl_listen_fd, SHUT_RDWR);
         close(g_ssl_listen_fd);
         g_ssl_listen_fd = -1;
       }
