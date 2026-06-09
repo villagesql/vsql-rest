@@ -165,12 +165,19 @@ static vef_next_wakeup_t rest_worker(vef_wakeup_reason_t reason,
   switch (reason) {
     case VEF_WAKEUP_ENABLE: {
       // handle is NULL at ENABLE — cannot open SQL session here.
-      // Create the request queue, listen sockets, and start accept threads.
+      // Try to bind listen sockets BEFORE setting any state. If HTTP bind
+      // fails (e.g. port in use), leave the extension cleanly disabled
+      // rather than half-enabled with no listener.
+      int http_fd = vsql_rest::create_listen_socket(static_cast<int>(g_port));
+      if (http_fd < 0) {
+        // Bind failed. Don't touch g_queue / g_running. DISABLE on this
+        // state will be a clean no-op.
+        return {};
+      }
+
       g_queue.emplace();
       g_running.store(true, std::memory_order_relaxed);
-
-      // HTTP listener.
-      g_listen_fd = vsql_rest::create_listen_socket(static_cast<int>(g_port));
+      g_listen_fd = http_fd;
 
       // HTTPS listener (only if cert+key are configured).
       std::string cert = g_ssl_cert ? g_ssl_cert : "";
@@ -184,11 +191,9 @@ static vef_next_wakeup_t rest_worker(vef_wakeup_reason_t reason,
       }
 
       // Start accept threads.
-      if (g_listen_fd >= 0) {
-        g_accept_thread = std::thread(vsql_rest::accept_loop,
-                                      g_listen_fd, nullptr,
-                                      &*g_queue, &g_running);
-      }
+      g_accept_thread = std::thread(vsql_rest::accept_loop,
+                                    g_listen_fd, nullptr,
+                                    &*g_queue, &g_running);
       if (g_ssl_listen_fd >= 0 && g_tls_ctx.is_valid()) {
         g_ssl_accept_thread = std::thread(vsql_rest::accept_loop,
                                           g_ssl_listen_fd,
