@@ -9,10 +9,10 @@ SET GLOBAL vsql_rest.require_auth = ON;
 --echo ""
 
 # C37: Valid HS256 JWT → 200.
---exec REST_PORT=$REST_PORT python3 $MYSQL_TEST_DIR/suite/vsql_rest/t/rest_jwt_helper.py valid_200
+--exec REST_PORT=$REST_PORT python3 $MYSQL_TEST_DIR/suite/vsql-rest/t/rest_jwt_helper.py valid_200
 
 # C38: Expired JWT → 401.
---exec REST_PORT=$REST_PORT python3 $MYSQL_TEST_DIR/suite/vsql_rest/t/rest_jwt_helper.py expired_401
+--exec REST_PORT=$REST_PORT python3 $MYSQL_TEST_DIR/suite/vsql-rest/t/rest_jwt_helper.py expired_401
 
 # C40: JWT sub injected as @vsql_rest_jwt_sub; view filters by it.
 # MySQL views cannot use user variables directly; a helper function is required.
@@ -32,7 +32,7 @@ CREATE VIEW test_rest.owned AS
 # Wait for schema cache TTL (2s in test mode) to expire so view is visible.
 --sleep 2.5
 
---exec REST_PORT=$REST_PORT python3 $MYSQL_TEST_DIR/suite/vsql_rest/t/rest_jwt_helper.py view_filter
+--exec REST_PORT=$REST_PORT python3 $MYSQL_TEST_DIR/suite/vsql-rest/t/rest_jwt_helper.py view_filter
 
 SET GLOBAL vsql_rest.require_auth = OFF;
 
