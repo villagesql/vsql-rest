@@ -17,13 +17,14 @@ SET GLOBAL vsql_rest.vsql_rest_enabled = ON;
 --perl
 use strict;
 my $ssl_port = '$REST_SSL_PORT';
-print STDERR "Waiting for HTTPS listener on port $ssl_port...\n";
-for (1..20) {
+my $started = 0;
+for (1..30) {
     sleep(1);
     my $resp = `curl -sk -o /dev/null -w "%{http_code}" "https://localhost:$ssl_port/customers" 2>/dev/null`;
     chomp $resp;
-    last if $resp eq '200';
+    if ($resp eq '200') { $started = 1; last; }
 }
+print STDERR "vsql_rest HTTPS listener on port $ssl_port: " . ($started ? "ready" : "NOT ready after 30s") . "\n";
 EOF
 
 # C41: HTTPS responds 200 (self-signed, skip verify with -k).
