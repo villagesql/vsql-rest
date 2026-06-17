@@ -28,6 +28,8 @@
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
+#include <cerrno>
+#include <cstdio>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -187,6 +189,12 @@ static vef_next_wakeup_t rest_worker(vef_wakeup_reason_t reason,
         if (g_tls_ctx.init(cert, key, tls_err)) {
           g_ssl_listen_fd = vsql_rest::create_listen_socket(
               static_cast<int>(g_ssl_port));
+          if (g_ssl_listen_fd < 0) {
+            fprintf(stderr, "[vsql_rest] HTTPS bind failed on port %lld: %s\n",
+                    g_ssl_port, strerror(errno));
+          }
+        } else {
+          fprintf(stderr, "[vsql_rest] TLS init failed: %s\n", tls_err.c_str());
         }
       }
 
