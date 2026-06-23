@@ -33,7 +33,7 @@
 
 namespace vsql_rest {
 
-int create_listen_socket(int port) {
+int create_listen_socket(int port, int* bound_port) {
   int fd = socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return -1;
 
@@ -52,6 +52,15 @@ int create_listen_socket(int port) {
   if (listen(fd, 128) < 0) {
     close(fd);
     return -1;
+  }
+  if (bound_port) {
+    struct sockaddr_in actual{};
+    socklen_t len = sizeof(actual);
+    if (getsockname(fd, reinterpret_cast<struct sockaddr*>(&actual), &len) == 0) {
+      *bound_port = ntohs(actual.sin_port);
+    } else {
+      *bound_port = port;
+    }
   }
   return fd;
 }

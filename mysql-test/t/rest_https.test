@@ -1,31 +1,22 @@
 --source rest_setup.inc
 
 # C41 + C42: HTTPS on ssl_port, HTTP on port still work simultaneously.
-# Requires a self-signed cert at /tmp/vsql_rest_test.crt and key.
+# Self-signed cert is generated per-test under MYSQL_TMP_DIR so concurrent
+# workers can't clobber a shared cert path.
 
---exec openssl req -x509 -newkey rsa:2048 -keyout /tmp/vsql_rest_test.key -out /tmp/vsql_rest_test.crt -days 1 -nodes -subj "/CN=localhost" 2>/dev/null && echo "cert generated"
+--exec openssl req -x509 -newkey rsa:2048 -keyout $MYSQL_TMP_DIR/vsql_rest_test.key -out $MYSQL_TMP_DIR/vsql_rest_test.crt -days 1 -nodes -subj "/CN=localhost" 2>/dev/null && echo "cert generated"
 
-SET GLOBAL vsql_rest.ssl_cert = '/tmp/vsql_rest_test.crt';
-SET GLOBAL vsql_rest.ssl_key  = '/tmp/vsql_rest_test.key';
 --disable_query_log
---eval SET GLOBAL vsql_rest.ssl_port = $REST_SSL_PORT
+--eval SET GLOBAL vsql_rest.ssl_cert = '$MYSQL_TMP_DIR/vsql_rest_test.crt'
+--eval SET GLOBAL vsql_rest.ssl_key  = '$MYSQL_TMP_DIR/vsql_rest_test.key'
+SET GLOBAL vsql_rest.ssl_port = 0;
 --enable_query_log
 SET GLOBAL vsql_rest.vsql_rest_enabled = OFF;
 --sleep 0.5
 SET GLOBAL vsql_rest.vsql_rest_enabled = ON;
-# Poll until HTTPS listener is ready (TLS startup takes longer than plain HTTP, especially under CI load).
---perl
-use strict;
-my $ssl_port = '$REST_SSL_PORT';
-my $started = 0;
-for (1..30) {
-    sleep(1);
-    my $resp = `curl -sk -o /dev/null -w "%{http_code}" "https://localhost:$ssl_port/customers" 2>/dev/null`;
-    chomp $resp;
-    if ($resp eq '200') { $started = 1; last; }
-}
-print STDERR "vsql_rest HTTPS listener on port $ssl_port: " . ($started ? "ready" : "NOT ready after 30s") . "\n";
-EOF
+# Re-enable rebinds both listeners to fresh OS-assigned ports — rediscover.
+--source rest_wait_http.inc
+--source rest_wait_https.inc
 
 # C41: HTTPS responds 200 (self-signed, skip verify with -k).
 --exec curl -sk -o /dev/null -w "%{http_code}" "https://localhost:$REST_SSL_PORT/customers"
@@ -37,5 +28,8 @@ EOF
 
 SET GLOBAL vsql_rest.ssl_cert = '';
 SET GLOBAL vsql_rest.ssl_key  = '';
+
+--remove_file $MYSQL_TMP_DIR/vsql_rest_test.crt
+--remove_file $MYSQL_TMP_DIR/vsql_rest_test.key
 
 --source rest_teardown.inc

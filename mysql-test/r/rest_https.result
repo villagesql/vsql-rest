@@ -30,8 +30,6 @@ SET GLOBAL vsql_rest.schema = 'test_rest';
 SET GLOBAL vsql_rest.schema_ttl = 2;
 SET GLOBAL vsql_rest.vsql_rest_enabled = ON;
 cert generated
-SET GLOBAL vsql_rest.ssl_cert = '/tmp/vsql_rest_test.crt';
-SET GLOBAL vsql_rest.ssl_key  = '/tmp/vsql_rest_test.key';
 SET GLOBAL vsql_rest.vsql_rest_enabled = OFF;
 SET GLOBAL vsql_rest.vsql_rest_enabled = ON;
 200""

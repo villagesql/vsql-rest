@@ -56,8 +56,8 @@ Then configure via `SET GLOBAL`:
 | Variable | Default | Purpose |
 |---|---|---|
 | `vsql_rest.vsql_rest_enabled` | OFF | Start/stop the server |
-| `vsql_rest.port` | 3000 | HTTP listen port |
-| `vsql_rest.ssl_port` | 3443 | HTTPS listen port |
+| `vsql_rest.port` | 3000 | HTTP listen port (0 = OS-assigned) |
+| `vsql_rest.ssl_port` | 3443 | HTTPS listen port (0 = OS-assigned) |
 | `vsql_rest.ssl_cert` | `""` | Path to TLS certificate file |
 | `vsql_rest.ssl_key` | `""` | Path to TLS private key file |
 | `vsql_rest.schema` | `""` | Database schema to expose |
@@ -77,6 +77,8 @@ Observability (via `SHOW STATUS LIKE 'vsql_rest%'`):
 | `vsql_rest.requests_total` | Total requests processed |
 | `vsql_rest.connections_total` | Total TCP connections accepted |
 | `vsql_rest.requests_active` | Requests currently queued |
+| `vsql_rest.http_port` | Actual bound HTTP port (0 when not listening) |
+| `vsql_rest.https_port` | Actual bound HTTPS port (0 when not listening) |
 
 ## Function Reference
 
@@ -242,7 +244,7 @@ Note: `allowed_tables` also prevents FK-embedded related tables from being fetch
 
 ## HTTPS
 
-Set `ssl_cert` and `ssl_key` to enable HTTPS. Both HTTP and HTTPS listeners run simultaneously on their respective ports.
+Set `ssl_cert` and `ssl_key` to enable HTTPS. Both HTTP and HTTPS listeners run simultaneously on their respective ports. If a TLS listener is configured but fails to bind or initialize, the server refuses to start (fail-closed) rather than falling back to plaintext-only.
 
 ```sql
 SET GLOBAL vsql_rest.ssl_cert = '/path/to/cert.pem';

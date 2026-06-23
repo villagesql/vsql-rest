@@ -63,6 +63,8 @@ static char*     g_table_methods     = nullptr;
 static long long g_requests_total     = 0;
 static long long g_connections_total  = 0;
 static long long g_requests_active    = 0;
+static long long g_http_port_actual   = 0;
+static long long g_https_port_actual  = 0;
 
 // Runtime state — valid only between ENABLE and DISABLE.
 static int                g_listen_fd     = -1;
@@ -88,8 +90,8 @@ namespace tw  = vsql::preview_thread_worker;
 static sq::SqlQueryCapability g_sql_query_cap;
 
 static auto g_sys_vars = syv::make_capability({
-  syv::make_int ("port",           "HTTP listen port",          &g_port,         3000, 1, 65535),
-  syv::make_int ("ssl_port",       "HTTPS listen port",         &g_ssl_port,     3443, 1, 65535),
+  syv::make_int ("port",           "HTTP listen port (0 = OS-assigned)",  &g_port,     3000, 0, 65535),
+  syv::make_int ("ssl_port",       "HTTPS listen port (0 = OS-assigned)", &g_ssl_port, 3443, 0, 65535),
   syv::make_str ("ssl_cert",       "Path to TLS cert file",     &g_ssl_cert,     ""),
   syv::make_str ("ssl_key",        "Path to TLS key file",      &g_ssl_key,      ""),
   syv::make_str ("schema",         "Exposed database schema",   &g_schema,       ""),
@@ -107,6 +109,8 @@ static auto g_status_vars = stv::make_capability({
   stv::make_int("requests_total",    &g_requests_total),
   stv::make_int("connections_total", &g_connections_total),
   stv::make_int("requests_active",   &g_requests_active),
+  stv::make_int("http_port",         &g_http_port_actual),
+  stv::make_int("https_port",        &g_https_port_actual),
 });
 
 // ============================================================================
@@ -167,42 +171,53 @@ static vef_next_wakeup_t rest_worker(vef_wakeup_reason_t reason,
   switch (reason) {
     case VEF_WAKEUP_ENABLE: {
       // handle is NULL at ENABLE — cannot open SQL session here.
-      // Try to bind listen sockets BEFORE setting any state. If HTTP bind
-      // fails (e.g. port in use), leave the extension cleanly disabled
-      // rather than half-enabled with no listener.
-      int http_fd = vsql_rest::create_listen_socket(static_cast<int>(g_port));
+      // Bring up every required listener BEFORE committing state. When
+      // cert+key are set the HTTPS listener is required: any failure tears
+      // down and leaves the extension disabled rather than silently serving
+      // plaintext-only.
+      int http_port = 0;
+      int http_fd = vsql_rest::create_listen_socket(static_cast<int>(g_port),
+                                                    &http_port);
       if (http_fd < 0) {
-        // Bind failed. Don't touch g_queue / g_running. DISABLE on this
-        // state will be a clean no-op.
+        fprintf(stderr, "[vsql_rest] HTTP bind failed on port %lld: %s\n",
+                g_port, strerror(errno));
         return {};
       }
 
-      g_queue.emplace();
-      g_running.store(true, std::memory_order_relaxed);
-      g_listen_fd = http_fd;
-
-      // HTTPS listener (only if cert+key are configured).
+      int ssl_fd = -1;
+      int ssl_port = 0;
       std::string cert = g_ssl_cert ? g_ssl_cert : "";
       std::string key  = g_ssl_key  ? g_ssl_key  : "";
       if (!cert.empty() && !key.empty()) {
         std::string tls_err;
-        if (g_tls_ctx.init(cert, key, tls_err)) {
-          g_ssl_listen_fd = vsql_rest::create_listen_socket(
-              static_cast<int>(g_ssl_port));
-          if (g_ssl_listen_fd < 0) {
-            fprintf(stderr, "[vsql_rest] HTTPS bind failed on port %lld: %s\n",
-                    g_ssl_port, strerror(errno));
-          }
-        } else {
+        if (!g_tls_ctx.init(cert, key, tls_err)) {
           fprintf(stderr, "[vsql_rest] TLS init failed: %s\n", tls_err.c_str());
+          close(http_fd);
+          return {};
+        }
+        ssl_fd = vsql_rest::create_listen_socket(static_cast<int>(g_ssl_port),
+                                                 &ssl_port);
+        if (ssl_fd < 0) {
+          fprintf(stderr, "[vsql_rest] HTTPS bind failed on port %lld: %s\n",
+                  g_ssl_port, strerror(errno));
+          close(http_fd);
+          g_tls_ctx.reset();
+          return {};
         }
       }
 
-      // Start accept threads.
+      // All required listeners are up — commit state.
+      g_queue.emplace();
+      g_running.store(true, std::memory_order_relaxed);
+      g_listen_fd = http_fd;
+      g_http_port_actual = http_port;
+      g_ssl_listen_fd = ssl_fd;
+      g_https_port_actual = (ssl_fd >= 0) ? ssl_port : 0;
+
       g_accept_thread = std::thread(vsql_rest::accept_loop,
                                     g_listen_fd, nullptr,
                                     &*g_queue, &g_running);
-      if (g_ssl_listen_fd >= 0 && g_tls_ctx.is_valid()) {
+      if (g_ssl_listen_fd >= 0) {
         g_ssl_accept_thread = std::thread(vsql_rest::accept_loop,
                                           g_ssl_listen_fd,
                                           g_tls_ctx.get(),
@@ -263,6 +278,8 @@ static vef_next_wakeup_t rest_worker(vef_wakeup_reason_t reason,
     case VEF_WAKEUP_DISABLE: {
       // Signal accept threads to stop, close sockets.
       g_running.store(false, std::memory_order_relaxed);
+      g_http_port_actual = 0;
+      g_https_port_actual = 0;
 
       // shutdown() before close() so accept() returns immediately on Linux.
       // close() alone does not wake a thread blocked in accept() on the same

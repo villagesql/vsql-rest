@@ -89,8 +89,8 @@ directly from request input.
 | Variable | Type | Default | Purpose |
 |---|---|---|---|
 | `vsql_rest.vsql_rest_enabled` | BOOL | ON | Start/stop the server (thread_worker control var) |
-| `vsql_rest.port` | INT | 3000 | HTTP listen port |
-| `vsql_rest.ssl_port` | INT | 3443 | HTTPS listen port |
+| `vsql_rest.port` | INT | 3000 | HTTP listen port (0 = OS-assigned) |
+| `vsql_rest.ssl_port` | INT | 3443 | HTTPS listen port (0 = OS-assigned) |
 | `vsql_rest.ssl_cert` | STR | `""` | Path to TLS cert file |
 | `vsql_rest.ssl_key` | STR | `""` | Path to TLS key file |
 | `vsql_rest.schema` | STR | `""` | Exposed database schema |
@@ -105,6 +105,8 @@ directly from request input.
 - `vsql_rest.requests_total` — total requests processed
 - `vsql_rest.connections_total` — total TCP connections accepted
 - `vsql_rest.requests_active` — requests currently queued
+- `vsql_rest.http_port` — actual bound HTTP port (0 when not listening)
+- `vsql_rest.https_port` — actual bound HTTPS port (0 when not listening)
 
 ## Preview APIs in use
 

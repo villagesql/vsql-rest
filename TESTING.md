@@ -64,13 +64,14 @@ perl mysql-test-run.pl \
 
 ## Shared includes
 
-- `rest_setup.inc` — installs extension, creates `test_rest` database, loads test data, enables server on port 18080
+- `rest_setup.inc` — installs extension, creates `test_rest` database, loads test data, enables the server on an OS-assigned port (`port = 0`) discovered via the `vsql_rest.http_port` status var
 - `rest_teardown.inc` — disables server, uninstalls extension, drops database
+- `rest_wait_http.inc` / `rest_wait_https.inc` — wait for the listener to bind, then capture the OS-assigned port into `$REST_PORT` / `$REST_SSL_PORT` (re-source after re-enabling, since the port changes on every enable)
 - `rest_jwt_helper.py` — Python helper for generating HS256 JWT tokens at test runtime (used by `rest_auth.test`)
 
 ## Notes
 
-- Tests use port `18080` (not the default `3000`) to avoid conflicts with existing services.
+- Tests bind OS-assigned ports (`port`/`ssl_port` = 0) and read the actual port from the `vsql_rest.http_port` / `vsql_rest.https_port` status vars, so parallel MTR workers never collide on a fixed port.
 - The HTTPS test generates a temporary self-signed certificate via `openssl req` and uses `curl -k` to skip verification.
 - The auth test generates JWT tokens at runtime using Python's `hmac` module. The secret `test-secret-key` is hardcoded in both the test and the helper script.
 - Stored procedures that return result sets via `SELECT` are not testable via `/rpc/` — see Known Limitations in README.md.

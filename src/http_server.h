@@ -26,9 +26,10 @@
 
 namespace vsql_rest {
 
-// Create and bind a listening TCP socket on the given port.
+// Create and bind a listening TCP socket. Pass port 0 for an OS-assigned
+// port; the actual bound port is written to *bound_port when non-null.
 // Returns the fd, or -1 on failure (errno set).
-int create_listen_socket(int port);
+int create_listen_socket(int port, int* bound_port = nullptr);
 
 // Format an HttpResponse as a raw HTTP/1.1 response string.
 std::string format_http_response(const HttpResponse& resp);
