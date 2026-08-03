@@ -239,6 +239,15 @@ static vef_next_wakeup_t rest_worker(vef_wakeup_reason_t reason,
       auto session = g_sql_query_cap.open(handle);
       if (!session) return {};
 
+      // The SQL executor escapes user input with backslash escaping. If the
+      // server runs with NO_BACKSLASH_ESCAPES that escaping is defeated (\\'
+      // leaves the quote live -> SQL injection), so strip that mode from this
+      // internal session. Comma-guarded so removing it never leaves a stray
+      // separator; other modes (e.g. strict) are preserved.
+      session.sql("SET SESSION sql_mode = TRIM(BOTH ',' FROM REPLACE("
+                  "CONCAT(',', @@SESSION.sql_mode, ','), "
+                  "',NO_BACKSLASH_ESCAPES,', ','))").execute();
+
       // Refresh schema cache if needed.
       g_schema_cache.refresh_if_needed(session, schema_name,
                                        static_cast<int>(g_schema_ttl));

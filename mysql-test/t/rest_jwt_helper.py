@@ -44,6 +44,11 @@ elif action == "expired_401":
     tok = make_token({"sub": "alice@example.com", "exp": int(time.time()) - 3600})
     print(curl_code("/customers", token=tok))
 
+elif action == "noexp_401":
+    # Token with no exp claim must be rejected (fail closed), not accepted forever.
+    tok = make_token({"sub": "alice@example.com"})
+    print(curl_code("/customers", token=tok))
+
 elif action == "view_filter":
     tok = make_token({"sub": "alice@example.com", "exp": int(time.time()) + 3600})
     d = curl_json("/owned", token=tok)

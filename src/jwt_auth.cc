@@ -80,7 +80,9 @@ static JwtClaims parse_claims(const std::string& payload_json) {
 }
 
 static bool check_expiry(const JwtClaims& claims) {
-  if (claims.exp == 0) return true;  // no exp claim — accept
+  // Fail closed: a token with no exp claim (claims.exp defaults to 0) would
+  // otherwise be accepted forever. Require exp and enforce it.
+  if (claims.exp == 0) return false;
   return std::time(nullptr) < claims.exp;
 }
 

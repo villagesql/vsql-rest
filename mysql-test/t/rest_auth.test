@@ -14,6 +14,9 @@ SET GLOBAL vsql_rest.require_auth = ON;
 # C38: Expired JWT → 401.
 --exec REST_PORT=$REST_PORT python3 $MYSQL_TEST_DIR/suite/vsql-rest/t/rest_jwt_helper.py expired_401
 
+# C38b: JWT with no exp claim → 401 (must not be accepted forever).
+--exec REST_PORT=$REST_PORT python3 $MYSQL_TEST_DIR/suite/vsql-rest/t/rest_jwt_helper.py noexp_401
+
 # C40: JWT sub injected as @vsql_rest_jwt_sub; view filters by it.
 # MySQL views cannot use user variables directly; a helper function is required.
 --disable_warnings
