@@ -33,6 +33,10 @@
 
 namespace vsql_rest {
 
+// Maximum accepted request-body size. Caps the allocation driven by a
+// client-supplied Content-Length so an oversized header can't exhaust memory.
+static constexpr long long kMaxRequestBody = 8LL * 1024 * 1024;  // 8 MiB
+
 int create_listen_socket(int port, int* bound_port) {
   int fd = socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return -1;
@@ -193,6 +197,18 @@ static void handle_connection(Conn& conn, RequestQueue* queue) {
   if (cl_it != req.headers.end()) {
     long long content_length = 0;
     try { content_length = std::stoll(cl_it->second); } catch (...) {}
+    // Bound the body: an attacker-supplied Content-Length must not drive an
+    // unbounded req.body allocation (memory-exhaustion DoS). Reject early.
+    if (content_length > kMaxRequestBody) {
+      HttpResponse resp;
+      resp.status = 413;
+      resp.body = "{\"message\":\"request body too large\",\"details\":null,"
+                  "\"hint\":null,\"code\":\"VSQL0004\"}";
+      resp.headers.emplace_back("Content-Type", "application/json");
+      std::string raw_resp = format_http_response(resp);
+      conn.write_all(raw_resp.data(), static_cast<int>(raw_resp.size()));
+      return;
+    }
     if (content_length > 0) {
       // How many body bytes are already in raw?
       size_t already = raw.size() > header_len ? raw.size() - header_len : 0;

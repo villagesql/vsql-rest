@@ -34,6 +34,7 @@ SET GLOBAL vsql_rest.require_auth = ON;
 401""
 200
 401
+401
 DROP FUNCTION IF EXISTS test_rest.vsql_rest_jwt_sub;
 DROP VIEW IF EXISTS test_rest.owned;
 CREATE FUNCTION test_rest.vsql_rest_jwt_sub() RETURNS VARCHAR(255)
