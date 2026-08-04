@@ -184,6 +184,16 @@ curl -H 'Authorization: Bearer <token>' http://localhost:3000/customers
 
 Supported algorithms: **HS256** (HMAC-SHA256) and **RS256** (RSA-SHA256). For RS256, set `vsql_rest.jwt_public_key` to a PEM file path.
 
+**`exp` is required.** Verification fails closed on expiry: a token whose `exp`
+claim is in the past — or that carries no `exp` claim at all — is rejected with
+`401`. This is a behavior change from 0.0.2, which accepted tokens with no `exp`
+claim and never expired them. If your issuer mints tokens without `exp`, add one
+before upgrading; otherwise those callers start receiving:
+
+```json
+{"message":"token expired","details":null,"hint":null,"code":"VSQL0001"}
+```
+
 **JWT claims as user variables** — after verification, claims are injected as MySQL user variables before query execution:
 
 | JWT claim | MySQL variable |
@@ -277,12 +287,23 @@ For production deployments, a TLS-terminating reverse proxy (nginx, Caddy) in fr
 
 9. **Extension upgrade path** — no `ALTER EXTENSION` command. Version upgrades require `UNINSTALL EXTENSION vsql_rest` then `INSTALL EXTENSION vsql_rest`. Tracked: [#12 Extension upgrades](https://github.com/villagesql/villagesql-server/issues/12) — 👍 it to signal demand.
 
+10. **Request bodies are capped at 8 MiB** — the cap bounds the allocation driven
+    by a client-supplied `Content-Length`, so an oversized header cannot exhaust
+    server memory. A request declaring a `Content-Length` above 8 MiB is rejected
+    with `413` before the body is read, and the size is not configurable:
+
+    ```json
+    {"message":"request body too large","details":null,"hint":null,"code":"VSQL0004"}
+    ```
+
+    Large bulk inserts must be split across multiple requests.
+
 ## Security Considerations
 
 - **MySQL grants are bypassed** — vsql_rest executes queries through an internal session; `GRANT`/`REVOKE` have no effect on what the REST API can read or write. Use `allowed_tables`, `allowed_routines`, and `table_methods` to restrict the exposed surface, and JWT + view-based row filtering for per-caller access control. See [Access Control](#access-control).
 - **JWT secret exposure** — `vsql_rest.jwt_secret` is visible as plaintext in `SHOW GLOBAL VARIABLES`. On shared or audited servers, use RS256 instead: set `vsql_rest.jwt_public_key` to a PEM file path. The public key path is not sensitive.
 - **TLS in production** — the built-in HTTPS listener is suitable for development and internal use. For production, a TLS-terminating reverse proxy (nginx, Caddy) in front of the plain HTTP port gives you certificate rotation, OCSP stapling, and modern cipher control without restarting the extension.
-- **SQL injection** — user-supplied values are escaped via `mysql_escape()` before interpolation. Table and column names are validated against the schema cache whitelist and never taken directly from request input. The security guarantee depends on both: if you find a bypass, please report it.
+- **SQL injection** — user-supplied values are escaped via `mysql_escape()` before interpolation. Table and column names are validated against the schema cache whitelist and never taken directly from request input. Because that escaping is backslash-based, `NO_BACKSLASH_ESCAPES` would defeat it (`\'` would leave the quote live), so the extension strips that mode from its own internal session at session open; other modes, such as strict mode, are preserved. The security guarantee depends on all three: if you find a bypass, please report it.
 - **Network exposure** — vsql_rest listens on all interfaces by default. In production, bind the database host to a private network or use firewall rules to restrict access to the REST port.
 
 ## Testing
