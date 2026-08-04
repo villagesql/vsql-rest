@@ -191,6 +191,12 @@ claim and never expired them. If your issuer mints tokens without `exp`, add one
 before upgrading; otherwise those callers start receiving:
 
 ```json
+{"message":"token missing exp claim","details":null,"hint":null,"code":"VSQL0001"}
+```
+
+A token whose `exp` is in the past reports the expiry instead:
+
+```json
 {"message":"token expired","details":null,"hint":null,"code":"VSQL0001"}
 ```
 

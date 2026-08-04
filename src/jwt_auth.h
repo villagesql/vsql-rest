@@ -26,6 +26,7 @@ struct JwtClaims {
   std::string sub;
   std::string role;
   long long exp{0};
+  bool has_exp{false};  // false when the token carried no numeric exp claim
   long long iat{0};
   std::unordered_map<std::string, std::string> extra;  // additional string claims
 };

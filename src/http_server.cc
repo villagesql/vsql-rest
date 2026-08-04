@@ -84,7 +84,9 @@ std::string format_http_response(const HttpResponse& resp) {
     case 404: reason = "Not Found"; break;
     case 405: reason = "Method Not Allowed"; break;
     case 409: reason = "Conflict"; break;
+    case 413: reason = "Content Too Large"; break;
     case 500: reason = "Internal Server Error"; break;
+    case 503: reason = "Service Unavailable"; break;
     default:  reason = "Unknown"; break;
   }
 

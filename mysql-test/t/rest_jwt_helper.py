@@ -23,6 +23,19 @@ def curl_code(path, token=None):
     cmd.append(BASE + path)
     return subprocess.run(cmd, capture_output=True, text=True).stdout.strip()
 
+def curl_code_msg(path, token=None):
+    """Return "<status> <message>" so a test asserts the cause, not just the code."""
+    cmd = ["curl", "-s", "-w", "\n%{http_code}"]
+    if token:
+        cmd += ["-H", f"Authorization: Bearer {token}"]
+    cmd.append(BASE + path)
+    out = subprocess.run(cmd, capture_output=True, text=True).stdout.rsplit("\n", 1)
+    body, code = (out[0], out[-1]) if len(out) == 2 else ("", out[-1])
+    try:
+        return f"{code} {json.loads(body)['message']}"
+    except Exception:
+        return f"{code} <unparseable: {body[:60]}>"
+
 def curl_json(path, token=None):
     cmd = ["curl", "-s"]
     if token:
@@ -42,12 +55,13 @@ if action == "valid_200":
 
 elif action == "expired_401":
     tok = make_token({"sub": "alice@example.com", "exp": int(time.time()) - 3600})
-    print(curl_code("/customers", token=tok))
+    print(curl_code_msg("/customers", token=tok))
 
 elif action == "noexp_401":
-    # Token with no exp claim must be rejected (fail closed), not accepted forever.
+    # Token with no exp claim must be rejected (fail closed), not accepted forever
+    # — and must say so, rather than claiming the token expired.
     tok = make_token({"sub": "alice@example.com"})
-    print(curl_code("/customers", token=tok))
+    print(curl_code_msg("/customers", token=tok))
 
 elif action == "view_filter":
     tok = make_token({"sub": "alice@example.com", "exp": int(time.time()) + 3600})
