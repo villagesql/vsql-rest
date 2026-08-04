@@ -33,14 +33,14 @@ namespace vsql_rest {
 // Map MySQL error numbers to HTTP status codes.
 // Constraint violations (FK, duplicate key) → 409 Conflict.
 // Everything else → 500 Internal Server Error.
-static int sql_errno_to_http(uint32_t mysql_errno) {
+static Status sql_errno_to_http(uint32_t mysql_errno) {
   switch (mysql_errno) {
     case 1062:  // ER_DUP_ENTRY — unique/primary key violation
     case 1451:  // ER_ROW_IS_REFERENCED_2 — FK parent row referenced
     case 1452:  // ER_NO_REFERENCED_ROW_2 — FK child row missing
-      return 409;
+      return Status::kConflict;
     default:
-      return 500;
+      return Status::kInternalServerError;
   }
 }
 
@@ -355,15 +355,14 @@ static bool validate_column(const std::string& col, const TableInfo& info) {
 }
 
 // Collect filter params from a parsed query string into and_filters/or_groups.
-// Skips pagination/ordering keys. Returns a filled HttpResponse on error (status != 0),
-// or an empty HttpResponse (status == 0) on success.
-static HttpResponse collect_filters(
+// Skips pagination/ordering keys. Returns the error response to send, or
+// std::nullopt when every param was accepted.
+static std::optional<HttpResponse> collect_filters(
     const std::vector<std::pair<std::string, std::string>>& params,
     const TableInfo& table_info,
     std::vector<Filter>& and_filters,
     std::vector<std::vector<Filter>>& or_groups) {
   HttpResponse err;
-  err.status = 0;
   for (const auto& [k, v] : params) {
     if (k == "select" || k == "order" || k == "limit" || k == "offset") continue;
     if (k == "or") {
@@ -372,19 +371,19 @@ static HttpResponse collect_filters(
       continue;
     }
     if (!validate_column(k, table_info)) {
-      err.status = 400;
+      err.status = Status::kBadRequest;
       err.body = emit_error("unknown column: " + k);
       return err;
     }
     auto f = parse_filter(k, v);
     if (!f) {
-      err.status = 400;
+      err.status = Status::kBadRequest;
       err.body = emit_error("invalid filter operator in: " + k + "=" + v);
       return err;
     }
     and_filters.push_back(*f);
   }
-  return err;
+  return std::nullopt;
 }
 
 // --- GET handler ---
@@ -420,7 +419,7 @@ static HttpResponse handle_get(vsql::preview_sql_query::Session& session,
         order_col = v.substr(0, d);
         order_dir = v.substr(d + 1);
         if (!validate_column(order_col, table_info)) {
-          resp.status = 400;
+          resp.status = Status::kBadRequest;
           resp.body = emit_error("unknown column: " + order_col);
           return resp;
         }
@@ -434,14 +433,14 @@ static HttpResponse handle_get(vsql::preview_sql_query::Session& session,
       // Pass as a single-element params list to reuse collect_filters.
       std::vector<std::pair<std::string,std::string>> one{{k, v}};
       auto err = collect_filters(one, table_info, and_filters, or_groups);
-      if (err.status != 0) return err;
+      if (err) return *err;
     }
   }
 
   // Validate select columns.
   for (const auto& col : select_spec.columns) {
     if (!validate_column(col, table_info)) {
-      resp.status = 400;
+      resp.status = Status::kBadRequest;
       resp.body = emit_error("unknown column: " + col);
       return resp;
     }
@@ -740,7 +739,7 @@ static HttpResponse handle_post(vsql::preview_sql_query::Session& session,
   HttpResponse resp;
 
   if (body_str.empty()) {
-    resp.status = 400;
+    resp.status = Status::kBadRequest;
     resp.body = emit_error("request body is required for POST");
     return resp;
   }
@@ -749,7 +748,7 @@ static HttpResponse handle_post(vsql::preview_sql_query::Session& session,
   try {
     body_json = nlohmann::json::parse(body_str);
   } catch (const std::exception& e) {
-    resp.status = 400;
+    resp.status = Status::kBadRequest;
     resp.body = emit_error(std::string("invalid JSON: ") + e.what());
     return resp;
   }
@@ -761,14 +760,14 @@ static HttpResponse handle_post(vsql::preview_sql_query::Session& session,
   } else if (body_json.is_object()) {
     rows.push_back(body_json);
   } else {
-    resp.status = 400;
+    resp.status = Status::kBadRequest;
     resp.body = emit_error("POST body must be a JSON object or array");
     return resp;
   }
 
   // Build column set from first row and validate all columns.
   if (rows.empty()) {
-    resp.status = 400;
+    resp.status = Status::kBadRequest;
     resp.body = emit_error("empty array");
     return resp;
   }
@@ -777,7 +776,7 @@ static HttpResponse handle_post(vsql::preview_sql_query::Session& session,
   long long last_insert_id = 0;
   for (const auto& row : rows) {
     if (!row.is_object()) {
-      resp.status = 400;
+      resp.status = Status::kBadRequest;
       resp.body = emit_error("each element must be a JSON object");
       return resp;
     }
@@ -785,7 +784,7 @@ static HttpResponse handle_post(vsql::preview_sql_query::Session& session,
     bool first = true;
     for (auto& [key, val] : row.items()) {
       if (!validate_column(key, table_info)) {
-        resp.status = 400;
+        resp.status = Status::kBadRequest;
         resp.body = emit_error("unknown column: " + key);
         return resp;
       }
@@ -828,14 +827,14 @@ static HttpResponse handle_post(vsql::preview_sql_query::Session& session,
         " WHERE " + backtick(pk_col) + " = " + std::to_string(last_insert_id);
     auto sel_r = session.sql(sel_sql).execute();
     if (!sel_r.has_error()) {
-      resp.status = 200;
+      resp.status = Status::kOk;
       resp.body = emit_result_array(sel_r, table_info.columns);
       resp.headers.emplace_back("Content-Type", "application/json");
       return resp;
     }
   }
 
-  resp.status = 201;
+  resp.status = Status::kCreated;
   if (!pk_col.empty() && last_insert_id > 0) {
     resp.headers.emplace_back(
         "Location", "/" + table_name + "?" + pk_col +
@@ -858,7 +857,7 @@ static HttpResponse handle_patch(vsql::preview_sql_query::Session& session,
   HttpResponse resp;
 
   if (body_str.empty()) {
-    resp.status = 400;
+    resp.status = Status::kBadRequest;
     resp.body = emit_error("request body is required for PATCH");
     return resp;
   }
@@ -873,7 +872,7 @@ static HttpResponse handle_patch(vsql::preview_sql_query::Session& session,
     }
   }
   if (!has_filter) {
-    resp.status = 400;
+    resp.status = Status::kBadRequest;
     resp.body = emit_error("PATCH without a filter would update all rows; add at least one filter");
     return resp;
   }
@@ -882,13 +881,13 @@ static HttpResponse handle_patch(vsql::preview_sql_query::Session& session,
   try {
     body_json = nlohmann::json::parse(body_str);
   } catch (const std::exception& e) {
-    resp.status = 400;
+    resp.status = Status::kBadRequest;
     resp.body = emit_error(std::string("invalid JSON: ") + e.what());
     return resp;
   }
 
   if (!body_json.is_object()) {
-    resp.status = 400;
+    resp.status = Status::kBadRequest;
     resp.body = emit_error("PATCH body must be a JSON object");
     return resp;
   }
@@ -901,7 +900,7 @@ static HttpResponse handle_patch(vsql::preview_sql_query::Session& session,
       if (ci.name == key) { found = true; break; }
     }
     if (!found) {
-      resp.status = 400;
+      resp.status = Status::kBadRequest;
       resp.body = emit_error("unknown column: " + key);
       return resp;
     }
@@ -914,7 +913,7 @@ static HttpResponse handle_patch(vsql::preview_sql_query::Session& session,
   std::vector<Filter> and_filters;
   std::vector<std::vector<Filter>> or_groups;
   auto ferr = collect_filters(params, table_info, and_filters, or_groups);
-  if (ferr.status != 0) return ferr;
+  if (ferr) return *ferr;
 
   std::string where = build_where(and_filters, or_groups,
                                   schema_name, table_name);
@@ -935,14 +934,14 @@ static HttpResponse handle_patch(vsql::preview_sql_query::Session& session,
         where;
     auto sel_r = session.sql(sel_sql).execute();
     if (!sel_r.has_error()) {
-      resp.status = 200;
+      resp.status = Status::kOk;
       resp.body = emit_result_array(sel_r, table_info.columns);
       resp.headers.emplace_back("Content-Type", "application/json");
       return resp;
     }
   }
 
-  resp.status = 204;
+  resp.status = Status::kNoContent;
   return resp;
 }
 
@@ -964,7 +963,7 @@ static HttpResponse handle_delete(vsql::preview_sql_query::Session& session,
     }
   }
   if (!has_filter) {
-    resp.status = 400;
+    resp.status = Status::kBadRequest;
     resp.body = emit_error("DELETE without a filter would delete all rows; add at least one filter");
     return resp;
   }
@@ -972,7 +971,7 @@ static HttpResponse handle_delete(vsql::preview_sql_query::Session& session,
   std::vector<Filter> and_filters;
   std::vector<std::vector<Filter>> or_groups;
   auto ferr2 = collect_filters(params, table_info, and_filters, or_groups);
-  if (ferr2.status != 0) return ferr2;
+  if (ferr2) return *ferr2;
 
   std::string where = build_where(and_filters, or_groups,
                                   schema_name, table_name);
@@ -986,7 +985,7 @@ static HttpResponse handle_delete(vsql::preview_sql_query::Session& session,
     return resp;
   }
 
-  resp.status = 204;
+  resp.status = Status::kNoContent;
   return resp;
 }
 
@@ -1006,7 +1005,7 @@ static HttpResponse handle_rpc(vsql::preview_sql_query::Session& session,
     try {
       params_json = nlohmann::json::parse(body_str);
     } catch (...) {
-      resp.status = 400;
+      resp.status = Status::kBadRequest;
       resp.body = emit_error("invalid JSON body");
       return resp;
     }
@@ -1052,7 +1051,7 @@ static HttpResponse handle_rpc(vsql::preview_sql_query::Session& session,
     }
   }
 
-  resp.status = 200;
+  resp.status = Status::kOk;
   return resp;
 }
 
@@ -1136,7 +1135,7 @@ HttpResponse execute_request(vsql::preview_sql_query::Session& session,
       std::string token = auth.substr(7);
       auto jwt_res = verify_jwt(token, jwt_secret, jwt_pubkey_path);
       if (!jwt_res.ok) {
-        resp.status = 401;
+        resp.status = Status::kUnauthorized;
         resp.body = emit_error(jwt_res.error);
         return resp;
       }
@@ -1164,7 +1163,7 @@ HttpResponse execute_request(vsql::preview_sql_query::Session& session,
   }
 
   if (!authed) {
-    resp.status = 401;
+    resp.status = Status::kUnauthorized;
     resp.body = emit_error("authentication required");
     return resp;
   }
@@ -1194,13 +1193,13 @@ HttpResponse execute_request(vsql::preview_sql_query::Session& session,
       path.compare(0, 5, "/rpc/") == 0) {
     std::string rname = path.substr(5);
     if (!allowed_routines.empty() && allowed_routines.count(rname) == 0) {
-      resp.status = 404;
+      resp.status = Status::kNotFound;
       resp.body = emit_error("routine not found: " + rname);
       return resp;
     }
     const auto* ri = schema.get_routine(rname);
     if (!ri) {
-      resp.status = 404;
+      resp.status = Status::kNotFound;
       resp.body = emit_error("routine not found: " + rname);
       return resp;
     }
@@ -1209,7 +1208,7 @@ HttpResponse execute_request(vsql::preview_sql_query::Session& session,
 
   // Table operations: path is /table_name
   if (path.size() < 2 || path[0] != '/') {
-    resp.status = 400;
+    resp.status = Status::kBadRequest;
     resp.body = emit_error("invalid path: " + path);
     return resp;
   }
@@ -1218,14 +1217,14 @@ HttpResponse execute_request(vsql::preview_sql_query::Session& session,
   while (!table_name.empty() && table_name.back() == '/') table_name.pop_back();
 
   if (!schema.table_exists(table_name)) {
-    resp.status = 404;
+    resp.status = Status::kNotFound;
     resp.body = emit_error("table not found: " + table_name);
     return resp;
   }
 
   // Allowlist check: treat unlisted tables as not found (avoids leaking names).
   if (!allowed_tables.empty() && allowed_tables.count(table_name) == 0) {
-    resp.status = 404;
+    resp.status = Status::kNotFound;
     resp.body = emit_error("table not found: " + table_name);
     return resp;
   }
@@ -1235,7 +1234,7 @@ HttpResponse execute_request(vsql::preview_sql_query::Session& session,
     auto mit = table_methods.find(table_name);
     if (mit != table_methods.end() &&
         mit->second.count(req.method) == 0) {
-      resp.status = 405;
+      resp.status = Status::kMethodNotAllowed;
       resp.body = emit_error("method not allowed: " + req.method);
       return resp;
     }
@@ -1243,7 +1242,7 @@ HttpResponse execute_request(vsql::preview_sql_query::Session& session,
 
   const auto* tbl = schema.get_table(table_name);
   if (!tbl) {
-    resp.status = 500;
+    resp.status = Status::kInternalServerError;
     resp.body = emit_error("internal error: table info unavailable");
     return resp;
   }
@@ -1261,7 +1260,7 @@ HttpResponse execute_request(vsql::preview_sql_query::Session& session,
   } else if (req.method == "DELETE") {
     return handle_delete(session, table_name, req.raw_query, schema_name, *tbl);
   } else {
-    resp.status = 405;
+    resp.status = Status::kMethodNotAllowed;
     resp.body = emit_error("method not allowed: " + req.method);
     return resp;
   }
