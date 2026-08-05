@@ -2,6 +2,7 @@
 
 SET GLOBAL vsql_rest.jwt_secret = 'test-secret-key';
 SET GLOBAL vsql_rest.require_auth = ON;
+SET @orig_sql_mode = @@GLOBAL.sql_mode;
 --sleep 0.3
 
 # C36: No Authorization header → 401.
@@ -37,6 +38,28 @@ CREATE VIEW test_rest.owned AS
 
 --exec REST_PORT=$REST_PORT python3 $MYSQL_TEST_DIR/suite/vsql-rest/t/rest_jwt_helper.py view_filter
 
+# C38c: the auth scheme is case-insensitive per RFC 9110.
+--exec REST_PORT=$REST_PORT python3 $MYSQL_TEST_DIR/suite/vsql-rest/t/rest_jwt_helper.py lowercase_bearer_200
+
+# C38d: a 401 carries a WWW-Authenticate challenge.
+--exec curl -s -D - -o /dev/null "http://localhost:$REST_PORT/customers" | grep -i "^www-authenticate:" | tr -d '\r'
+
+# C41: a claim name that is not an identifier is not interpolated into SQL.
+# "a = 1, GLOBAL sql_mode" would otherwise extend the SET statement; the
+# request must still succeed, with the claim simply skipped.
+--exec REST_PORT=$REST_PORT python3 $MYSQL_TEST_DIR/suite/vsql-rest/t/rest_jwt_helper.py hostile_claim_name
+--echo # sql_mode unchanged by the hostile claim name:
+SELECT @@GLOBAL.sql_mode = @orig_sql_mode AS sql_mode_intact;
+
 SET GLOBAL vsql_rest.require_auth = OFF;
+
+# C42: with auth optional, an anonymous request must not inherit the claims of
+# an authenticated one sharing the same SQL session.
+DROP FUNCTION IF EXISTS test_rest.whoami;
+CREATE FUNCTION test_rest.whoami() RETURNS VARCHAR(255)
+NOT DETERMINISTIC READS SQL DATA
+RETURN COALESCE(@vsql_rest_jwt_sub, 'NONE');
+--sleep 2.5
+--exec REST_PORT=$REST_PORT python3 $MYSQL_TEST_DIR/suite/vsql-rest/t/rest_jwt_helper.py no_claim_leak
 
 --source rest_teardown.inc

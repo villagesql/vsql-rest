@@ -63,6 +63,47 @@ elif action == "noexp_401":
     tok = make_token({"sub": "alice@example.com"})
     print(curl_code_msg("/customers", token=tok))
 
+elif action == "lowercase_bearer_200":
+    tok = make_token({"sub": "alice@example.com", "exp": int(time.time()) + 3600})
+    cmd = ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
+           "-H", f"authorization: bearer {tok}", BASE + "/customers"]
+    print(subprocess.run(cmd, capture_output=True, text=True).stdout.strip())
+
+elif action == "hostile_claim_name":
+    # A claim name is interpolated as a SQL identifier, where value escaping
+    # does nothing. This one would extend the SET into a second assignment.
+    tok = make_token({"sub": "alice@example.com",
+                      "exp": int(time.time()) + 3600,
+                      "a = 1, GLOBAL sql_mode": "ANSI_QUOTES"})
+    print(curl_code("/customers", token=tok))
+
+elif action == "no_claim_leak":
+    # One SQL session serves every request drained in a single wakeup, so an
+    # unauthenticated request can land on a session a previous caller's claims
+    # were set on. It must never observe them. Fired concurrently to make that
+    # sharing likely; the assertion holds regardless of how they batch.
+    import threading
+    tok = make_token({"sub": "alice@example.com", "exp": int(time.time()) + 3600})
+
+    def rpc(token=None):
+        cmd = ["curl", "-s", "-X", "POST",
+               "-H", "Content-Type: application/json", "-d", "{}"]
+        if token:
+            cmd += ["-H", f"Authorization: Bearer {token}"]
+        cmd.append(BASE + "/rpc/whoami")
+        return subprocess.run(cmd, capture_output=True, text=True).stdout.strip()
+
+    seen = []
+    def authed():
+        rpc(token=tok)
+    def anon():
+        seen.append(rpc())
+    for _ in range(10):
+        ta, tb = threading.Thread(target=authed), threading.Thread(target=anon)
+        ta.start(); tb.start(); ta.join(); tb.join()
+    leaked = [s for s in seen if "alice" in str(s)]
+    print("leaked %d/%d" % (len(leaked), len(seen)))
+
 elif action == "view_filter":
     tok = make_token({"sub": "alice@example.com", "exp": int(time.time()) + 3600})
     d = curl_json("/owned", token=tok)

@@ -22,6 +22,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <cstdio>
@@ -36,6 +37,38 @@ namespace vsql_rest {
 // Maximum accepted request-body size. Caps the allocation driven by a
 // client-supplied Content-Length so an oversized header can't exhaust memory.
 static constexpr long long kMaxRequestBody = 8LL * 1024 * 1024;  // 8 MiB
+
+// How long a client may take to deliver its whole request. Nothing else bounds
+// these reads: read_request_raw() and the body loop in handle_connection()
+// block until data arrives, and each connection owns a detached thread, so a
+// client that drags out a request holds a thread inside the server process for
+// as long as it likes.
+//
+// Enforced twice, because a socket timeout alone is not enough: SO_RCVTIMEO
+// bounds the gap between two reads, so a client dribbling one byte just inside
+// that gap resets it forever. request_expired() bounds the request as a whole.
+static constexpr int kReadTimeoutSeconds = 20;
+
+using SteadyClock = std::chrono::steady_clock;
+
+static bool request_expired(SteadyClock::time_point started) {
+  return SteadyClock::now() - started >
+         std::chrono::seconds(kReadTimeoutSeconds);
+}
+
+// Ceiling on live connection threads. The read deadline bounds how long any
+// one connection can hold a thread; this bounds how many can do so at once.
+static constexpr int kMaxConnections = 128;
+
+static std::atomic<int> g_active_connections{0};
+
+// Releases the connection slot when the connection thread exits, by whichever
+// path — including an exception escaping handle_connection().
+namespace {
+struct ConnectionSlot {
+  ~ConnectionSlot() { g_active_connections.fetch_sub(1, std::memory_order_relaxed); }
+};
+}  // namespace
 
 int create_listen_socket(int port, int* bound_port) {
   int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -75,7 +108,7 @@ std::string format_http_response(const HttpResponse& resp) {
 
   // Status line. No default label: -Werror=switch turns a new Status without a
   // reason phrase into a build failure.
-  const char* reason = nullptr;
+  const char* reason = "Unknown";
   switch (resp.status) {
     case Status::kOk:                  reason = "OK"; break;
     case Status::kCreated:             reason = "Created"; break;
@@ -87,6 +120,7 @@ std::string format_http_response(const HttpResponse& resp) {
     case Status::kConflict:            reason = "Conflict"; break;
     case Status::kContentTooLarge:     reason = "Content Too Large"; break;
     case Status::kInternalServerError: reason = "Internal Server Error"; break;
+    case Status::kNotImplemented:      reason = "Not Implemented"; break;
     case Status::kServiceUnavailable:  reason = "Service Unavailable"; break;
   }
 
@@ -123,11 +157,12 @@ std::string format_http_response(const HttpResponse& resp) {
 // Read from a connection (TLS or plain) into a buffer until headers are complete.
 // Returns the raw bytes read.
 template <typename Conn>
-static std::string read_request_raw(Conn& conn) {
+static std::string read_request_raw(Conn& conn, SteadyClock::time_point started) {
   std::string buf;
   buf.reserve(4096);
   char tmp[4096];
   while (buf.size() < 65536) {
+    if (request_expired(started)) return {};
     int n = conn.read(tmp, static_cast<int>(std::min(sizeof(tmp),
                       static_cast<size_t>(65536 - buf.size()))));
     if (n <= 0) break;
@@ -187,12 +222,36 @@ static bool parse_http_request(const std::string& raw, HttpRequest& req,
 // Handle a single connection: read request, push to queue, wait, send response.
 template <typename Conn>
 static void handle_connection(Conn& conn, RequestQueue* queue) {
-  std::string raw = read_request_raw(conn);
+  const auto started = SteadyClock::now();
+  std::string raw = read_request_raw(conn, started);
   if (raw.empty()) return;
 
   HttpRequest req;
   size_t header_len = 0;
   if (!parse_http_request(raw, req, header_len)) return;
+
+  // A body framed by Transfer-Encoding cannot be read: this server only
+  // understands Content-Length framing. Refuse explicitly instead of falling
+  // through to Content-Length, which RFC 9112 6.3 forbids precisely because
+  // disagreeing with a front-end proxy about which header frames the body is
+  // how requests get smuggled. Silently ignoring it also produced a puzzling
+  // "invalid JSON body" for a request whose body was simply never read.
+  auto te_it = req.headers.find("transfer-encoding");
+  if (te_it != req.headers.end()) {
+    std::string te = te_it->second;
+    std::transform(te.begin(), te.end(), te.begin(), ::tolower);
+    if (te != "identity") {
+      HttpResponse resp;
+      resp.status = Status::kNotImplemented;
+      resp.body = "{\"message\":\"Transfer-Encoding is not supported; send "
+                  "Content-Length\",\"details\":null,\"hint\":null,"
+                  "\"code\":\"VSQL0006\"}";
+      resp.headers.emplace_back("Content-Type", "application/json");
+      std::string raw_resp = format_http_response(resp);
+      conn.write_all(raw_resp.data(), static_cast<int>(raw_resp.size()));
+      return;
+    }
+  }
 
   // Read body if Content-Length is present.
   auto cl_it = req.headers.find("content-length");
@@ -218,6 +277,7 @@ static void handle_connection(Conn& conn, RequestQueue* queue) {
       // Read remaining body bytes.
       long long remaining = content_length - static_cast<long long>(already);
       while (remaining > 0) {
+        if (request_expired(started)) return;
         char tmp[4096];
         int n = conn.read(tmp, static_cast<int>(
             std::min(static_cast<long long>(sizeof(tmp)), remaining)));
@@ -258,7 +318,8 @@ static void handle_connection(Conn& conn, RequestQueue* queue) {
   conn.write_all(raw_resp.data(), static_cast<int>(raw_resp.size()));
 }
 
-void accept_loop(int listen_fd, SSL_CTX* ssl_ctx, RequestQueue* queue,
+void accept_loop(int listen_fd, SSL_CTX* ssl_ctx,
+                 std::shared_ptr<RequestQueue> queue,
                  std::atomic<bool>* running) {
   while (running->load(std::memory_order_relaxed)) {
     struct sockaddr_in client_addr{};
@@ -271,19 +332,55 @@ void accept_loop(int listen_fd, SSL_CTX* ssl_ctx, RequestQueue* queue,
       break;
     }
 
-    // Detach a thread per connection. Each connection handles one request.
-    if (ssl_ctx) {
-      std::thread([client_fd, ssl_ctx, queue]() {
-        TlsConn conn(ssl_ctx, client_fd);
-        if (!conn.accept()) return;
-        handle_connection(conn, queue);
-      }).detach();
-    } else {
-      std::thread([client_fd, queue]() {
+    struct timeval tv{kReadTimeoutSeconds, 0};
+    setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+    if (g_active_connections.load(std::memory_order_relaxed) >= kMaxConnections) {
+      // Refuse before spawning a thread — spawning one is the cost being
+      // capped. A TLS client gets a bare close: answering it would require
+      // completing the handshake this branch exists to avoid.
+      if (!ssl_ctx) {
+        HttpResponse resp;
+        resp.status = Status::kServiceUnavailable;
+        resp.body = "{\"message\":\"too many connections\",\"details\":null,"
+                    "\"hint\":null,\"code\":\"VSQL0005\"}";
+        resp.headers.emplace_back("Content-Type", "application/json");
+        std::string raw_resp = format_http_response(resp);
         PlainConn conn(client_fd);
-        handle_connection(conn, queue);
-        close(client_fd);
-      }).detach();
+        conn.write_all(raw_resp.data(), static_cast<int>(raw_resp.size()));
+      }
+      close(client_fd);
+      continue;
+    }
+    g_active_connections.fetch_add(1, std::memory_order_relaxed);
+
+    // Detach a thread per connection. Each connection handles one request.
+    // The thread holds a shared_ptr to the queue: DISABLE drops the extension's
+    // reference while connection threads may still be mid-request, and one of
+    // them reaching enqueue() on a destroyed queue crashes the server.
+    try {
+      if (ssl_ctx) {
+        std::thread([client_fd, ssl_ctx, queue]() {
+          ConnectionSlot slot;
+          TlsConn conn(ssl_ctx, client_fd);
+          if (!conn.accept()) return;
+          handle_connection(conn, queue.get());
+        }).detach();
+      } else {
+        std::thread([client_fd, queue]() {
+          ConnectionSlot slot;
+          PlainConn conn(client_fd);
+          handle_connection(conn, queue.get());
+          close(client_fd);
+        }).detach();
+      }
+    } catch (const std::exception& e) {
+      // Out of threads. Drop this connection but keep listening: the slot is
+      // ours to release, since no ConnectionSlot was ever constructed.
+      fprintf(stderr, "vsql_rest: cannot start connection thread: %s\n", e.what());
+      g_active_connections.fetch_sub(1, std::memory_order_relaxed);
+      close(client_fd);
     }
   }
 }

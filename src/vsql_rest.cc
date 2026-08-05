@@ -23,6 +23,7 @@
 #include <atomic>
 #include <cctype>
 #include <cstring>
+#include <memory>
 #include <optional>
 #include <sstream>
 #include <thread>
@@ -70,7 +71,10 @@ static long long g_https_port_actual  = 0;
 static int                g_listen_fd     = -1;
 static int                g_ssl_listen_fd = -1;
 static vsql_rest::TlsContext g_tls_ctx;
-static std::optional<vsql_rest::RequestQueue> g_queue;
+// shared_ptr, not optional: detached connection threads are never joined and
+// keep their own reference, so DISABLE dropping this one cannot free the queue
+// out from under a thread still mid-request.
+static std::shared_ptr<vsql_rest::RequestQueue> g_queue;
 static std::atomic<bool>  g_running{false};
 static std::thread        g_accept_thread;
 static std::thread        g_ssl_accept_thread;
@@ -207,7 +211,7 @@ static vef_next_wakeup_t rest_worker(vef_wakeup_reason_t reason,
       }
 
       // All required listeners are up — commit state.
-      g_queue.emplace();
+      g_queue = std::make_shared<vsql_rest::RequestQueue>();
       g_running.store(true, std::memory_order_relaxed);
       g_listen_fd = http_fd;
       g_http_port_actual = http_port;
@@ -216,12 +220,12 @@ static vef_next_wakeup_t rest_worker(vef_wakeup_reason_t reason,
 
       g_accept_thread = std::thread(vsql_rest::accept_loop,
                                     g_listen_fd, nullptr,
-                                    &*g_queue, &g_running);
+                                    g_queue, &g_running);
       if (g_ssl_listen_fd >= 0) {
         g_ssl_accept_thread = std::thread(vsql_rest::accept_loop,
                                           g_ssl_listen_fd,
                                           g_tls_ctx.get(),
-                                          &*g_queue, &g_running);
+                                          g_queue, &g_running);
       }
 
       // Re-arm on signal pipe with 50ms fallback.

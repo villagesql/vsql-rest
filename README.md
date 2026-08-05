@@ -142,7 +142,10 @@ curl -X POST -H 'Content-Type: application/json' \
 
 ### RPC: `POST /rpc/routine_name`
 
-Calls a stored function or DML stored procedure. Pass parameters as a JSON object.
+Calls a stored function or DML stored procedure. Pass parameters as a JSON
+object keyed by parameter name; keys are matched to the routine's declared
+parameters, so key order in the body does not matter. A missing parameter or a
+name the routine does not declare is a `400` — neither is silently ignored.
 
 ```bash
 # Stored function — returns scalar
@@ -207,6 +210,11 @@ A token whose `exp` is in the past reports the expiry instead:
 | `sub` | `@vsql_rest_jwt_sub` |
 | `role` | `@vsql_rest_jwt_role` |
 | Any string claim | `@vsql_rest_jwt_<claim>` |
+
+Only claim names made up of letters, digits, and underscores are injected. A
+claim name becomes part of a SQL identifier, where value escaping offers no
+protection, so anything else is skipped — including namespaced claims such as
+an issuer's `https://example.com/roles`.
 
 These can be used for row-level filtering via views. MySQL views cannot reference user variables directly; use a helper function:
 
@@ -304,12 +312,45 @@ For production deployments, a TLS-terminating reverse proxy (nginx, Caddy) in fr
 
     Large bulk inserts must be split across multiple requests.
 
+11. **Requests must complete within 20 seconds, and 128 connections are served
+    at once** — neither is configurable. A client has 20 seconds to deliver its
+    whole request, measured from the moment the connection is accepted, so
+    stalling and dribbling are both bounded. A client that connects while 128
+    connections are already in flight is refused immediately:
+
+    ```json
+    {"message":"too many connections","details":null,"hint":null,"code":"VSQL0005"}
+    ```
+
+    Both limits exist because every connection is served by its own thread
+    inside the database process. A client that never finishes its request holds
+    that thread for as long as it likes, so a handful of sockets could exhaust
+    server threads. The 20 seconds covers the request as a whole rather than
+    the gap between reads, which a slow-drip client would otherwise reset
+    indefinitely. Clients over the connection cap on the **HTTPS** listener are
+    closed without a response body — replying would require completing the TLS
+    handshake the cap exists to avoid.
+
+12. **`Content-Length` framing only** — a request whose body is framed with
+    `Transfer-Encoding` (including `chunked`) is refused with `501`:
+
+    ```json
+    {"message":"Transfer-Encoding is not supported; send Content-Length","details":null,"hint":null,"code":"VSQL0006"}
+    ```
+
+    Clients that stream a body of unknown length — `curl -T -`, or an HTTP
+    library given a generator or stream — must buffer it and send a
+    `Content-Length` instead. A reverse proxy in front of the extension can do
+    this for you; nginx buffers request bodies by default.
+
 ## Security Considerations
 
 - **MySQL grants are bypassed** — vsql_rest executes queries through an internal session; `GRANT`/`REVOKE` have no effect on what the REST API can read or write. Use `allowed_tables`, `allowed_routines`, and `table_methods` to restrict the exposed surface, and JWT + view-based row filtering for per-caller access control. See [Access Control](#access-control).
 - **JWT secret exposure** — `vsql_rest.jwt_secret` is visible as plaintext in `SHOW GLOBAL VARIABLES`. On shared or audited servers, use RS256 instead: set `vsql_rest.jwt_public_key` to a PEM file path. The public key path is not sensitive.
 - **TLS in production** — the built-in HTTPS listener is suitable for development and internal use. For production, a TLS-terminating reverse proxy (nginx, Caddy) in front of the plain HTTP port gives you certificate rotation, OCSP stapling, and modern cipher control without restarting the extension.
 - **SQL injection** — user-supplied values are escaped via `mysql_escape()` before interpolation. Table and column names are validated against the schema cache whitelist and never taken directly from request input. Because that escaping is backslash-based, `NO_BACKSLASH_ESCAPES` would defeat it (`\'` would leave the quote live), so the extension strips that mode from its own internal session at session open; other modes, such as strict mode, are preserved. The security guarantee depends on all three: if you find a bypass, please report it.
+- **Claim variables are per request** — one SQL session serves every request processed in the same batch, so `@vsql_rest_jwt_*` variables are reset before each request. Without that, a request presenting no token would inherit the previous caller's claims and a view filtering on `vsql_rest_jwt_sub()` would return their rows.
+- **Configure one JWT algorithm, not both** — the algorithm is taken from the token's `alg` header, so if both `jwt_secret` and `jwt_public_key` are set, tokens signed either way are accepted and the weaker of the two secrets sets your effective security. Set exactly one.
 - **Network exposure** — vsql_rest listens on all interfaces by default. In production, bind the database host to a private network or use firewall rules to restrict access to the REST port.
 
 ## Testing

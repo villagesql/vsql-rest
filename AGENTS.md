@@ -40,13 +40,19 @@ SET GLOBAL vsql_rest.vsql_rest_enabled = ON;
 
 ## Run tests
 
+Stage the suite inside the server source tree first and run it by name. Tests
+with helper scripts resolve them via `$MYSQL_TEST_DIR/suite/vsql-rest/t/`, so
+passing this directory to `--suite=` by path makes them fail to find the helper.
+
 ```bash
+ln -s /path/to/vsql-rest/mysql-test \
+      /path/to/villagesql-server/mysql-test/suite/vsql-rest
 cd /path/to/villagesql/build/mysql-test
 perl mysql-test-run.pl \
-  --suite=/path/to/vsql-rest/mysql-test \
+  --suite=vsql-rest \
   --mysqld=--vsql_allow_preview_extensions=ON
 perl mysql-test-run.pl \
-  --suite=/path/to/vsql-rest/mysql-test \
+  --suite=vsql-rest \
   --mysqld=--vsql_allow_preview_extensions=ON \
   --record
 ```

@@ -35,6 +35,12 @@ True
 True
 HTTP/1.1 413 Content Too Large
 request body too large
+501""
+VSQL0006
+# The refused request inserted nothing:
+SELECT COUNT(*) AS dave_rows FROM test_rest.customers WHERE name = 'Dave';
+dave_rows
+0
 400""
 400""
 400""

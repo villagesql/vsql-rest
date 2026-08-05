@@ -29,23 +29,17 @@ INSTALL EXTENSION vsql_rest;
 SET GLOBAL vsql_rest.schema = 'test_rest';
 SET GLOBAL vsql_rest.schema_ttl = 2;
 SET GLOBAL vsql_rest.vsql_rest_enabled = ON;
-12""
+# Case 1: a client that drags out a request is disconnected.
+closed by server within deadline
+# Case 2: disabling the extension under a parked connection is clean.
+SET GLOBAL vsql_rest.vsql_rest_enabled = OFF;
+# Server survived the disable:
+SELECT 1 AS alive;
+alive
+1
+# And still serves requests after re-enabling:
+SET GLOBAL vsql_rest.vsql_rest_enabled = ON;
 200""
-SELECT status FROM test_rest.orders WHERE id = 3;
-status
-shipped
-CREATE FUNCTION test_rest.divide(numerator INT, denominator INT)
-RETURNS INT DETERMINISTIC RETURN numerator DIV denominator;
-# {"numerator":10,"denominator":2} -> 5
-5""
-# same call, keys reversed -> still 5
-5""
-# A missing parameter is an error, not a silently short argument list.
-{"message":"missing parameter: denominator","details":null,"hint":null,"code":"VSQL0001"}""
-# A misspelled parameter is an error, not silently ignored.
-{"message":"unknown parameter: denomintor","details":null,"hint":null,"code":"VSQL0001"}""
-Content-Length: 180
-Content-Type: application/json
 SET GLOBAL vsql_rest.vsql_rest_enabled = OFF;
 UNINSTALL EXTENSION vsql_rest;
 DROP DATABASE IF EXISTS test_rest;

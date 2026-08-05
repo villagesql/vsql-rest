@@ -30,19 +30,31 @@ cmake --install build
 
 ## Run the full test suite
 
+The suite must be staged as `mysql-test/suite/vsql-rest/` inside the server
+**source** tree and run by suite name. Tests that shell out to a helper script
+resolve it through `$MYSQL_TEST_DIR/suite/vsql-rest/t/`, which only exists once
+the suite is staged there — passing this directory to `--suite=` by path
+instead makes those tests fail to find their helper. This is the same layout
+`villagesql/bld_tools/test_extension_vebs.sh` sets up for CI.
+
 ```bash
+ln -s /path/to/vsql-rest/mysql-test \
+      /path/to/villagesql-server/mysql-test/suite/vsql-rest
 cd /path/to/villagesql/build/mysql-test
 perl mysql-test-run.pl \
-  --suite=/path/to/vsql-rest/mysql-test \
+  --suite=vsql-rest \
   --mysqld=--vsql_allow_preview_extensions=ON
 ```
+
+`rest_timeouts` waits out the 20-second read deadline, so the suite takes
+roughly 25 seconds longer than the other tests would suggest.
 
 ## Regenerate result files after code changes
 
 ```bash
 cd /path/to/villagesql/build/mysql-test
 perl mysql-test-run.pl \
-  --suite=/path/to/vsql-rest/mysql-test \
+  --suite=vsql-rest \
   --mysqld=--vsql_allow_preview_extensions=ON \
   --record
 ```
