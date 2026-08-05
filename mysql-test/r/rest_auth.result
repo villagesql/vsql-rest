@@ -53,6 +53,13 @@ SELECT @@GLOBAL.sql_mode = @orig_sql_mode AS sql_mode_intact;
 sql_mode_intact
 1
 SET GLOBAL vsql_rest.require_auth = OFF;
+DROP FUNCTION IF EXISTS test_rest.whoami;
+Warnings:
+Note	1305	FUNCTION test_rest.whoami does not exist
+CREATE FUNCTION test_rest.whoami() RETURNS VARCHAR(255)
+NOT DETERMINISTIC READS SQL DATA
+RETURN COALESCE(@vsql_rest_jwt_sub, 'NONE');
+leaked 0/10
 SET GLOBAL vsql_rest.vsql_rest_enabled = OFF;
 UNINSTALL EXTENSION vsql_rest;
 DROP DATABASE IF EXISTS test_rest;

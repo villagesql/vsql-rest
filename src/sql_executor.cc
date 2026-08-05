@@ -1164,6 +1164,34 @@ HttpResponse execute_request(vsql::preview_sql_query::Session& session,
   resp.headers.emplace_back("Content-Type", "application/json");
 
   // --- Auth ---
+  // Clear any claim variables the previous request left behind. One SQL session
+  // serves every request drained in a single wakeup, so without this a request
+  // that presents no token inherits the last caller's identity — and the
+  // documented row-filtering pattern (a view calling vsql_rest_jwt_sub())
+  // would then hand that caller's rows to an anonymous request. Measured at
+  // 15/15 leaks before this reset existed.
+  //
+  // thread_local because only the thread_worker executes requests; the names
+  // are tracked rather than rediscovered so a request that set nothing costs
+  // no extra statement.
+  static thread_local std::vector<std::string> injected_claim_vars;
+  if (!injected_claim_vars.empty()) {
+    std::string clear_sql = "SET ";
+    for (size_t i = 0; i < injected_claim_vars.size(); ++i) {
+      if (i) clear_sql += ", ";
+      clear_sql += "@vsql_rest_jwt_" + injected_claim_vars[i] + " = NULL";
+    }
+    auto cv = session.sql(clear_sql).execute();
+    if (cv.has_error()) {
+      // Refuse rather than serve a request that may still see the previous
+      // caller's claims.
+      resp.status = Status::kInternalServerError;
+      resp.body = emit_error("could not reset session claim variables");
+      return resp;
+    }
+    injected_claim_vars.clear();
+  }
+
   JwtClaims claims;
   bool authed = !require_auth;
   auto it = req.headers.find("authorization");
@@ -1178,6 +1206,7 @@ HttpResponse execute_request(vsql::preview_sql_query::Session& session,
       auto jwt_res = verify_jwt(token, jwt_secret, jwt_pubkey_path);
       if (!jwt_res.ok) {
         resp.status = Status::kUnauthorized;
+        resp.headers.emplace_back("WWW-Authenticate", "Bearer");
         resp.body = emit_error(jwt_res.error);
         return resp;
       }
@@ -1191,6 +1220,7 @@ HttpResponse execute_request(vsql::preview_sql_query::Session& session,
       // or unset variable.
       auto set_jwt_var = [&session](const std::string& suffix,
                                     const std::string& value) {
+        injected_claim_vars.push_back(suffix);
         auto sv = session.sql("SET @vsql_rest_jwt_" + suffix + " = '" +
                               mysql_escape(value) + "'").execute();
         if (sv.has_error()) {

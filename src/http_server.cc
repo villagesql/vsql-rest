@@ -38,13 +38,23 @@ namespace vsql_rest {
 // client-supplied Content-Length so an oversized header can't exhaust memory.
 static constexpr long long kMaxRequestBody = 8LL * 1024 * 1024;  // 8 MiB
 
-// How long a client may stall mid-request before the connection is dropped.
-// Nothing else bounds these reads: read_request_raw() and the body loop in
-// handle_connection() block until data arrives, and each connection owns a
-// detached thread, so an idle client holds a thread inside the server process
-// for as long as it likes. Set on the accepted socket so it covers TLS reads
-// too (SSL_read goes through the same fd).
+// How long a client may take to deliver its whole request. Nothing else bounds
+// these reads: read_request_raw() and the body loop in handle_connection()
+// block until data arrives, and each connection owns a detached thread, so a
+// client that drags out a request holds a thread inside the server process for
+// as long as it likes.
+//
+// Enforced twice, because a socket timeout alone is not enough: SO_RCVTIMEO
+// bounds the gap between two reads, so a client dribbling one byte just inside
+// that gap resets it forever. request_expired() bounds the request as a whole.
 static constexpr int kReadTimeoutSeconds = 20;
+
+using SteadyClock = std::chrono::steady_clock;
+
+static bool request_expired(SteadyClock::time_point started) {
+  return SteadyClock::now() - started >
+         std::chrono::seconds(kReadTimeoutSeconds);
+}
 
 // Ceiling on live connection threads. The read deadline bounds how long any
 // one connection can hold a thread; this bounds how many can do so at once.
@@ -98,7 +108,7 @@ std::string format_http_response(const HttpResponse& resp) {
 
   // Status line. No default label: -Werror=switch turns a new Status without a
   // reason phrase into a build failure.
-  const char* reason = nullptr;
+  const char* reason = "Unknown";
   switch (resp.status) {
     case Status::kOk:                  reason = "OK"; break;
     case Status::kCreated:             reason = "Created"; break;
@@ -146,11 +156,12 @@ std::string format_http_response(const HttpResponse& resp) {
 // Read from a connection (TLS or plain) into a buffer until headers are complete.
 // Returns the raw bytes read.
 template <typename Conn>
-static std::string read_request_raw(Conn& conn) {
+static std::string read_request_raw(Conn& conn, SteadyClock::time_point started) {
   std::string buf;
   buf.reserve(4096);
   char tmp[4096];
   while (buf.size() < 65536) {
+    if (request_expired(started)) return {};
     int n = conn.read(tmp, static_cast<int>(std::min(sizeof(tmp),
                       static_cast<size_t>(65536 - buf.size()))));
     if (n <= 0) break;
@@ -210,7 +221,8 @@ static bool parse_http_request(const std::string& raw, HttpRequest& req,
 // Handle a single connection: read request, push to queue, wait, send response.
 template <typename Conn>
 static void handle_connection(Conn& conn, RequestQueue* queue) {
-  std::string raw = read_request_raw(conn);
+  const auto started = SteadyClock::now();
+  std::string raw = read_request_raw(conn, started);
   if (raw.empty()) return;
 
   HttpRequest req;
@@ -241,6 +253,7 @@ static void handle_connection(Conn& conn, RequestQueue* queue) {
       // Read remaining body bytes.
       long long remaining = content_length - static_cast<long long>(already);
       while (remaining > 0) {
+        if (request_expired(started)) return;
         char tmp[4096];
         int n = conn.read(tmp, static_cast<int>(
             std::min(static_cast<long long>(sizeof(tmp)), remaining)));
@@ -322,20 +335,28 @@ void accept_loop(int listen_fd, SSL_CTX* ssl_ctx,
     // The thread holds a shared_ptr to the queue: DISABLE drops the extension's
     // reference while connection threads may still be mid-request, and one of
     // them reaching enqueue() on a destroyed queue crashes the server.
-    if (ssl_ctx) {
-      std::thread([client_fd, ssl_ctx, queue]() {
-        ConnectionSlot slot;
-        TlsConn conn(ssl_ctx, client_fd);
-        if (!conn.accept()) return;
-        handle_connection(conn, queue.get());
-      }).detach();
-    } else {
-      std::thread([client_fd, queue]() {
-        ConnectionSlot slot;
-        PlainConn conn(client_fd);
-        handle_connection(conn, queue.get());
-        close(client_fd);
-      }).detach();
+    try {
+      if (ssl_ctx) {
+        std::thread([client_fd, ssl_ctx, queue]() {
+          ConnectionSlot slot;
+          TlsConn conn(ssl_ctx, client_fd);
+          if (!conn.accept()) return;
+          handle_connection(conn, queue.get());
+        }).detach();
+      } else {
+        std::thread([client_fd, queue]() {
+          ConnectionSlot slot;
+          PlainConn conn(client_fd);
+          handle_connection(conn, queue.get());
+          close(client_fd);
+        }).detach();
+      }
+    } catch (const std::exception& e) {
+      // Out of threads. Drop this connection but keep listening: the slot is
+      // ours to release, since no ConnectionSlot was ever constructed.
+      fprintf(stderr, "vsql_rest: cannot start connection thread: %s\n", e.what());
+      g_active_connections.fetch_sub(1, std::memory_order_relaxed);
+      close(client_fd);
     }
   }
 }

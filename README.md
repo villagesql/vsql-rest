@@ -313,18 +313,21 @@ For production deployments, a TLS-terminating reverse proxy (nginx, Caddy) in fr
     Large bulk inserts must be split across multiple requests.
 
 11. **Requests must complete within 20 seconds, and 128 connections are served
-    at once** — neither is configurable. A client that connects and then stalls
-    mid-request is disconnected after 20 seconds; a client that connects while
-    128 connections are already in flight is refused immediately:
+    at once** — neither is configurable. A client has 20 seconds to deliver its
+    whole request, measured from the moment the connection is accepted, so
+    stalling and dribbling are both bounded. A client that connects while 128
+    connections are already in flight is refused immediately:
 
     ```json
     {"message":"too many connections","details":null,"hint":null,"code":"VSQL0005"}
     ```
 
     Both limits exist because every connection is served by its own thread
-    inside the database process. A stalled client with no deadline holds that
-    thread indefinitely, so a handful of idle sockets could exhaust server
-    threads. Clients over the connection cap on the **HTTPS** listener are
+    inside the database process. A client that never finishes its request holds
+    that thread for as long as it likes, so a handful of sockets could exhaust
+    server threads. The 20 seconds covers the request as a whole rather than
+    the gap between reads, which a slow-drip client would otherwise reset
+    indefinitely. Clients over the connection cap on the **HTTPS** listener are
     closed without a response body — replying would require completing the TLS
     handshake the cap exists to avoid.
 
@@ -334,6 +337,7 @@ For production deployments, a TLS-terminating reverse proxy (nginx, Caddy) in fr
 - **JWT secret exposure** — `vsql_rest.jwt_secret` is visible as plaintext in `SHOW GLOBAL VARIABLES`. On shared or audited servers, use RS256 instead: set `vsql_rest.jwt_public_key` to a PEM file path. The public key path is not sensitive.
 - **TLS in production** — the built-in HTTPS listener is suitable for development and internal use. For production, a TLS-terminating reverse proxy (nginx, Caddy) in front of the plain HTTP port gives you certificate rotation, OCSP stapling, and modern cipher control without restarting the extension.
 - **SQL injection** — user-supplied values are escaped via `mysql_escape()` before interpolation. Table and column names are validated against the schema cache whitelist and never taken directly from request input. Because that escaping is backslash-based, `NO_BACKSLASH_ESCAPES` would defeat it (`\'` would leave the quote live), so the extension strips that mode from its own internal session at session open; other modes, such as strict mode, are preserved. The security guarantee depends on all three: if you find a bypass, please report it.
+- **Claim variables are per request** — one SQL session serves every request processed in the same batch, so `@vsql_rest_jwt_*` variables are reset before each request. Without that, a request presenting no token would inherit the previous caller's claims and a view filtering on `vsql_rest_jwt_sub()` would return their rows.
 - **Configure one JWT algorithm, not both** — the algorithm is taken from the token's `alg` header, so if both `jwt_secret` and `jwt_public_key` are set, tokens signed either way are accepted and the weaker of the two secrets sets your effective security. Set exactly one.
 - **Network exposure** — vsql_rest listens on all interfaces by default. In production, bind the database host to a private network or use firewall rules to restrict access to the REST port.
 

@@ -1,10 +1,10 @@
 --source rest_setup.inc
 
-# A client that connects and then stops sending must not park a connection
-# thread inside the server forever. Each accepted connection gets its own
-# detached thread, so an idle client is a held thread — the read deadline is
-# the only thing that ends it. Both cases here send a request line and never
-# terminate the headers, which is what a slow-loris client does.
+# A client that never finishes its request must not park a connection thread
+# inside the server forever. Each accepted connection gets its own detached
+# thread, so an unfinished request is a held thread. Both cases here send a
+# request line and never terminate the headers, which is what a slow-loris
+# client does.
 
 --write_file $MYSQLTEST_VARDIR/tmp/rest_halfopen.py
 import os, socket, subprocess, sys, time
@@ -28,23 +28,21 @@ def half_open():
 action = sys.argv[1]
 
 if action == 'closed_within_deadline':
+    # Dribble a header line every few seconds and never terminate the headers.
+    # A per-read socket timeout alone cannot stop this: every write resets the
+    # gap it measures. Only a deadline on the request as a whole ends it.
     s = half_open()
-    # Block until the server closes (recv returns b'') or we outlast the
-    # deadline by a wide margin. Bucketed output keeps the result file stable.
-    s.settimeout(DEADLINE * 2)
     start = time.time()
+    limit = DEADLINE * 2
     try:
-        data = s.recv(4096)
-    except socket.timeout:
-        print('STILL OPEN after %ds - no read deadline' % (DEADLINE * 2))
-        s.close()
-        sys.exit(0)
-    elapsed = time.time() - start
-    s.close()
-    if data:
-        print('server sent a response instead of closing: %r' % data[:40])
-    else:
+        while time.time() - start < limit:
+            time.sleep(DEADLINE / 4.0)
+            s.sendall(b'X-Pad: y\r\n')
+        print('STILL DRIPPING after %ds - deadline does not bound the request'
+              % limit)
+    except Exception:
         print('closed by server within deadline')
+    s.close()
 
 elif action == 'park_launcher':
     # Foreground launcher: spawn the parked connection in a detached child and
@@ -92,7 +90,7 @@ elif action == 'park_child':
         log('child failed: %s' % e)
 EOF
 
---echo # Case 1: an idle client is disconnected rather than held forever.
+--echo # Case 1: a client that drags out a request is disconnected.
 --exec REST_PORT=$REST_PORT DEADLINE=20 REST_TMP=$MYSQLTEST_VARDIR/tmp python3 $MYSQLTEST_VARDIR/tmp/rest_halfopen.py closed_within_deadline
 
 --echo # Case 2: disabling the extension under a parked connection is clean.

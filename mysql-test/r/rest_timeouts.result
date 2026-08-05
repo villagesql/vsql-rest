@@ -29,7 +29,7 @@ INSTALL EXTENSION vsql_rest;
 SET GLOBAL vsql_rest.schema = 'test_rest';
 SET GLOBAL vsql_rest.schema_ttl = 2;
 SET GLOBAL vsql_rest.vsql_rest_enabled = ON;
-# Case 1: an idle client is disconnected rather than held forever.
+# Case 1: a client that drags out a request is disconnected.
 closed by server within deadline
 # Case 2: disabling the extension under a parked connection is clean.
 SET GLOBAL vsql_rest.vsql_rest_enabled = OFF;

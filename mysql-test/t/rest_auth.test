@@ -53,4 +53,13 @@ SELECT @@GLOBAL.sql_mode = @orig_sql_mode AS sql_mode_intact;
 
 SET GLOBAL vsql_rest.require_auth = OFF;
 
+# C42: with auth optional, an anonymous request must not inherit the claims of
+# an authenticated one sharing the same SQL session.
+DROP FUNCTION IF EXISTS test_rest.whoami;
+CREATE FUNCTION test_rest.whoami() RETURNS VARCHAR(255)
+NOT DETERMINISTIC READS SQL DATA
+RETURN COALESCE(@vsql_rest_jwt_sub, 'NONE');
+--sleep 2.5
+--exec REST_PORT=$REST_PORT python3 $MYSQL_TEST_DIR/suite/vsql-rest/t/rest_jwt_helper.py no_claim_leak
+
 --source rest_teardown.inc
