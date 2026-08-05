@@ -331,6 +331,18 @@ For production deployments, a TLS-terminating reverse proxy (nginx, Caddy) in fr
     closed without a response body — replying would require completing the TLS
     handshake the cap exists to avoid.
 
+12. **`Content-Length` framing only** — a request whose body is framed with
+    `Transfer-Encoding` (including `chunked`) is refused with `501`:
+
+    ```json
+    {"message":"Transfer-Encoding is not supported; send Content-Length","details":null,"hint":null,"code":"VSQL0006"}
+    ```
+
+    Clients that stream a body of unknown length — `curl -T -`, or an HTTP
+    library given a generator or stream — must buffer it and send a
+    `Content-Length` instead. A reverse proxy in front of the extension can do
+    this for you; nginx buffers request bodies by default.
+
 ## Security Considerations
 
 - **MySQL grants are bypassed** — vsql_rest executes queries through an internal session; `GRANT`/`REVOKE` have no effect on what the REST API can read or write. Use `allowed_tables`, `allowed_routines`, and `table_methods` to restrict the exposed surface, and JWT + view-based row filtering for per-caller access control. See [Access Control](#access-control).

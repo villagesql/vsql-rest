@@ -120,6 +120,7 @@ std::string format_http_response(const HttpResponse& resp) {
     case Status::kConflict:            reason = "Conflict"; break;
     case Status::kContentTooLarge:     reason = "Content Too Large"; break;
     case Status::kInternalServerError: reason = "Internal Server Error"; break;
+    case Status::kNotImplemented:      reason = "Not Implemented"; break;
     case Status::kServiceUnavailable:  reason = "Service Unavailable"; break;
   }
 
@@ -228,6 +229,29 @@ static void handle_connection(Conn& conn, RequestQueue* queue) {
   HttpRequest req;
   size_t header_len = 0;
   if (!parse_http_request(raw, req, header_len)) return;
+
+  // A body framed by Transfer-Encoding cannot be read: this server only
+  // understands Content-Length framing. Refuse explicitly instead of falling
+  // through to Content-Length, which RFC 9112 6.3 forbids precisely because
+  // disagreeing with a front-end proxy about which header frames the body is
+  // how requests get smuggled. Silently ignoring it also produced a puzzling
+  // "invalid JSON body" for a request whose body was simply never read.
+  auto te_it = req.headers.find("transfer-encoding");
+  if (te_it != req.headers.end()) {
+    std::string te = te_it->second;
+    std::transform(te.begin(), te.end(), te.begin(), ::tolower);
+    if (te != "identity") {
+      HttpResponse resp;
+      resp.status = Status::kNotImplemented;
+      resp.body = "{\"message\":\"Transfer-Encoding is not supported; send "
+                  "Content-Length\",\"details\":null,\"hint\":null,"
+                  "\"code\":\"VSQL0006\"}";
+      resp.headers.emplace_back("Content-Type", "application/json");
+      std::string raw_resp = format_http_response(resp);
+      conn.write_all(raw_resp.data(), static_cast<int>(raw_resp.size()));
+      return;
+    }
+  }
 
   // Read body if Content-Length is present.
   auto cl_it = req.headers.find("content-length");

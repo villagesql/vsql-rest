@@ -50,6 +50,7 @@ enum class Status : int {
   kConflict            = 409,
   kContentTooLarge     = 413,
   kInternalServerError = 500,
+  kNotImplemented      = 501,
   kServiceUnavailable  = 503,
 };
 

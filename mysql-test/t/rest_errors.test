@@ -33,6 +33,14 @@ EOF
 --exec REST_PORT=$REST_PORT python3 $MYSQLTEST_VARDIR/tmp/rest_raw_helper.py
 --remove_file $MYSQLTEST_VARDIR/tmp/rest_raw_helper.py
 
+# C32c: a Transfer-Encoding body cannot be read, so it is refused rather than
+# treated as an empty one. -H forces curl to chunk the body.
+--exec curl -s -o /dev/null -w "%{http_code}" -X POST -H "Content-Type: application/json" -H "Transfer-Encoding: chunked" -d '{"name":"Dave"}' "http://localhost:$REST_PORT/customers"
+--echo ""
+--exec curl -s -X POST -H "Content-Type: application/json" -H "Transfer-Encoding: chunked" -d '{"name":"Dave"}' "http://localhost:$REST_PORT/customers" | python3 -c "import sys,json; print(json.load(sys.stdin)['code'])"
+--echo # The refused request inserted nothing:
+SELECT COUNT(*) AS dave_rows FROM test_rest.customers WHERE name = 'Dave';
+
 # C33: Unknown filter operator → 400.
 --exec curl -s -o /dev/null -w "%{http_code}" "http://localhost:$REST_PORT/customers?age=badop.30"
 --echo ""
