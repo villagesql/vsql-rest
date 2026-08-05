@@ -304,6 +304,22 @@ For production deployments, a TLS-terminating reverse proxy (nginx, Caddy) in fr
 
     Large bulk inserts must be split across multiple requests.
 
+11. **Requests must complete within 20 seconds, and 128 connections are served
+    at once** — neither is configurable. A client that connects and then stalls
+    mid-request is disconnected after 20 seconds; a client that connects while
+    128 connections are already in flight is refused immediately:
+
+    ```json
+    {"message":"too many connections","details":null,"hint":null,"code":"VSQL0005"}
+    ```
+
+    Both limits exist because every connection is served by its own thread
+    inside the database process. A stalled client with no deadline holds that
+    thread indefinitely, so a handful of idle sockets could exhaust server
+    threads. Clients over the connection cap on the **HTTPS** listener are
+    closed without a response body — replying would require completing the TLS
+    handshake the cap exists to avoid.
+
 ## Security Considerations
 
 - **MySQL grants are bypassed** — vsql_rest executes queries through an internal session; `GRANT`/`REVOKE` have no effect on what the REST API can read or write. Use `allowed_tables`, `allowed_routines`, and `table_methods` to restrict the exposed surface, and JWT + view-based row filtering for per-caller access control. See [Access Control](#access-control).

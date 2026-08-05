@@ -1,0 +1,124 @@
+--source rest_setup.inc
+
+# A client that connects and then stops sending must not park a connection
+# thread inside the server forever. Each accepted connection gets its own
+# detached thread, so an idle client is a held thread — the read deadline is
+# the only thing that ends it. Both cases here send a request line and never
+# terminate the headers, which is what a slow-loris client does.
+
+--write_file $MYSQLTEST_VARDIR/tmp/rest_halfopen.py
+import os, socket, subprocess, sys, time
+
+PORT     = int(os.environ['REST_PORT'])
+DEADLINE = int(os.environ['DEADLINE'])
+TMP      = os.environ['REST_TMP']
+READY    = os.path.join(TMP, 'parked.ready')
+LOG      = os.path.join(TMP, 'halfopen.log')
+
+def log(msg):
+    with open(LOG, 'a') as f:
+        f.write('%s\n' % msg)
+
+def half_open():
+    """Connect and send an unterminated request. Returns the live socket."""
+    s = socket.create_connection(('127.0.0.1', PORT), timeout=10)
+    s.sendall(b'GET /customers HTTP/1.1\r\nHost: localhost\r\n')
+    return s
+
+action = sys.argv[1]
+
+if action == 'closed_within_deadline':
+    s = half_open()
+    # Block until the server closes (recv returns b'') or we outlast the
+    # deadline by a wide margin. Bucketed output keeps the result file stable.
+    s.settimeout(DEADLINE * 2)
+    start = time.time()
+    try:
+        data = s.recv(4096)
+    except socket.timeout:
+        print('STILL OPEN after %ds - no read deadline' % (DEADLINE * 2))
+        s.close()
+        sys.exit(0)
+    elapsed = time.time() - start
+    s.close()
+    if data:
+        print('server sent a response instead of closing: %r' % data[:40])
+    else:
+        print('closed by server within deadline')
+
+elif action == 'park_launcher':
+    # Foreground launcher: spawn the parked connection in a detached child and
+    # do not return until the child reports it is connected. MTR blocks on this
+    # exec, so the connection is established before the next test line runs.
+    if os.path.exists(READY):
+        os.remove(READY)
+    child = subprocess.Popen([sys.executable, __file__, 'park_child'],
+                             start_new_session=True,
+                             stdout=subprocess.DEVNULL,
+                             stderr=subprocess.STDOUT)
+    for _ in range(200):          # 20s ceiling
+        if os.path.exists(READY):
+            sys.exit(0)
+        if child.poll() is not None:
+            break
+        time.sleep(0.1)
+    sys.stderr.write('parked connection never became ready; child log:\n')
+    if os.path.exists(LOG):
+        sys.stderr.write(open(LOG).read())
+    sys.exit(1)
+
+elif action == 'park_child':
+    # Park a connection, then complete the request after the test has disabled
+    # the extension underneath it. The connection thread then walks into the
+    # request queue, which the disable has already torn down.
+    watchdog = time.time() + 120   # self-exit so a skipped cleanup cannot leak
+    try:
+        s = half_open()
+        log('connected')
+        with open(READY, 'w') as f:
+            f.write('parked\n')
+        while time.time() < watchdog and not os.path.exists(
+                os.path.join(TMP, 'parked.go')):
+            time.sleep(0.1)
+        s.sendall(b'\r\n')
+        log('request completed after disable')
+        s.settimeout(5)
+        try:
+            s.recv(4096)
+        except Exception as e:
+            log('recv after disable: %s' % e)
+        s.close()
+    except Exception as e:
+        log('child failed: %s' % e)
+EOF
+
+--echo # Case 1: an idle client is disconnected rather than held forever.
+--exec REST_PORT=$REST_PORT DEADLINE=20 REST_TMP=$MYSQLTEST_VARDIR/tmp python3 $MYSQLTEST_VARDIR/tmp/rest_halfopen.py closed_within_deadline
+
+--echo # Case 2: disabling the extension under a parked connection is clean.
+--exec REST_PORT=$REST_PORT DEADLINE=20 REST_TMP=$MYSQLTEST_VARDIR/tmp python3 $MYSQLTEST_VARDIR/tmp/rest_halfopen.py park_launcher
+
+SET GLOBAL vsql_rest.vsql_rest_enabled = OFF;
+
+# Release the parked child so it completes its request against the torn-down
+# queue. Under ASan, a use-after-free in the connection thread aborts here.
+--write_file $MYSQLTEST_VARDIR/tmp/parked.go
+go
+EOF
+--sleep 3
+
+--echo # Server survived the disable:
+SELECT 1 AS alive;
+
+--echo # And still serves requests after re-enabling:
+SET GLOBAL vsql_rest.vsql_rest_enabled = ON;
+--source rest_wait_http.inc
+--exec curl -s -o /dev/null -w "%{http_code}" "http://localhost:$REST_PORT/customers"
+--echo ""
+
+--remove_file $MYSQLTEST_VARDIR/tmp/rest_halfopen.py
+--remove_file $MYSQLTEST_VARDIR/tmp/parked.ready
+--remove_file $MYSQLTEST_VARDIR/tmp/parked.go
+--remove_file $MYSQLTEST_VARDIR/tmp/halfopen.log
+
+--source rest_teardown.inc

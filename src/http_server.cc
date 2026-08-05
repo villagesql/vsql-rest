@@ -22,6 +22,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <cstdio>
@@ -36,6 +37,28 @@ namespace vsql_rest {
 // Maximum accepted request-body size. Caps the allocation driven by a
 // client-supplied Content-Length so an oversized header can't exhaust memory.
 static constexpr long long kMaxRequestBody = 8LL * 1024 * 1024;  // 8 MiB
+
+// How long a client may stall mid-request before the connection is dropped.
+// Nothing else bounds these reads: read_request_raw() and the body loop in
+// handle_connection() block until data arrives, and each connection owns a
+// detached thread, so an idle client holds a thread inside the server process
+// for as long as it likes. Set on the accepted socket so it covers TLS reads
+// too (SSL_read goes through the same fd).
+static constexpr int kReadTimeoutSeconds = 20;
+
+// Ceiling on live connection threads. The read deadline bounds how long any
+// one connection can hold a thread; this bounds how many can do so at once.
+static constexpr int kMaxConnections = 128;
+
+static std::atomic<int> g_active_connections{0};
+
+// Releases the connection slot when the connection thread exits, by whichever
+// path — including an exception escaping handle_connection().
+namespace {
+struct ConnectionSlot {
+  ~ConnectionSlot() { g_active_connections.fetch_sub(1, std::memory_order_relaxed); }
+};
+}  // namespace
 
 int create_listen_socket(int port, int* bound_port) {
   int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -258,7 +281,8 @@ static void handle_connection(Conn& conn, RequestQueue* queue) {
   conn.write_all(raw_resp.data(), static_cast<int>(raw_resp.size()));
 }
 
-void accept_loop(int listen_fd, SSL_CTX* ssl_ctx, RequestQueue* queue,
+void accept_loop(int listen_fd, SSL_CTX* ssl_ctx,
+                 std::shared_ptr<RequestQueue> queue,
                  std::atomic<bool>* running) {
   while (running->load(std::memory_order_relaxed)) {
     struct sockaddr_in client_addr{};
@@ -271,17 +295,45 @@ void accept_loop(int listen_fd, SSL_CTX* ssl_ctx, RequestQueue* queue,
       break;
     }
 
+    struct timeval tv{kReadTimeoutSeconds, 0};
+    setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+    if (g_active_connections.load(std::memory_order_relaxed) >= kMaxConnections) {
+      // Refuse before spawning a thread — spawning one is the cost being
+      // capped. A TLS client gets a bare close: answering it would require
+      // completing the handshake this branch exists to avoid.
+      if (!ssl_ctx) {
+        HttpResponse resp;
+        resp.status = Status::kServiceUnavailable;
+        resp.body = "{\"message\":\"too many connections\",\"details\":null,"
+                    "\"hint\":null,\"code\":\"VSQL0005\"}";
+        resp.headers.emplace_back("Content-Type", "application/json");
+        std::string raw_resp = format_http_response(resp);
+        PlainConn conn(client_fd);
+        conn.write_all(raw_resp.data(), static_cast<int>(raw_resp.size()));
+      }
+      close(client_fd);
+      continue;
+    }
+    g_active_connections.fetch_add(1, std::memory_order_relaxed);
+
     // Detach a thread per connection. Each connection handles one request.
+    // The thread holds a shared_ptr to the queue: DISABLE drops the extension's
+    // reference while connection threads may still be mid-request, and one of
+    // them reaching enqueue() on a destroyed queue crashes the server.
     if (ssl_ctx) {
       std::thread([client_fd, ssl_ctx, queue]() {
+        ConnectionSlot slot;
         TlsConn conn(ssl_ctx, client_fd);
         if (!conn.accept()) return;
-        handle_connection(conn, queue);
+        handle_connection(conn, queue.get());
       }).detach();
     } else {
       std::thread([client_fd, queue]() {
+        ConnectionSlot slot;
         PlainConn conn(client_fd);
-        handle_connection(conn, queue);
+        handle_connection(conn, queue.get());
         close(client_fd);
       }).detach();
     }

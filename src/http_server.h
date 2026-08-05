@@ -18,6 +18,7 @@
 #define VSQL_REST_HTTP_SERVER_H
 
 #include <atomic>
+#include <memory>
 #include <string>
 #include <thread>
 
@@ -39,7 +40,12 @@ std::string format_http_response(const HttpResponse& resp);
 // pushes it onto the queue, waits for the response, and sends it back.
 // ssl_ctx may be null for plain HTTP.
 // Runs until running is set to false OR listen_fd is closed.
-void accept_loop(int listen_fd, SSL_CTX* ssl_ctx, RequestQueue* queue,
+//
+// The queue is held by shared_ptr because the detached connection threads
+// outlive this call: they are never joined, so they must keep the queue alive
+// themselves rather than rely on the caller's reference.
+void accept_loop(int listen_fd, SSL_CTX* ssl_ctx,
+                 std::shared_ptr<RequestQueue> queue,
                  std::atomic<bool>* running);
 
 }  // namespace vsql_rest
