@@ -33,6 +33,8 @@ SET GLOBAL vsql_rest.vsql_rest_enabled = ON;
 True
 400""
 True
+HTTP/1.1 413 Content Too Large
+request body too large
 400""
 400""
 400""

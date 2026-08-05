@@ -45,6 +45,10 @@ add_library(vsql_rest SHARED
     src/third_party/picohttpparser.c
 )
 
+# A Status enumerator with no reason phrase in format_http_response() is a
+# build failure, not a "999 Unknown" status line at runtime.
+target_compile_options(vsql_rest PRIVATE -Werror=switch)
+
 # include-dev must come before include so preview headers take precedence
 # over older protocol headers in the stable include tree
 target_include_directories(vsql_rest PRIVATE

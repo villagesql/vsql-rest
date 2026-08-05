@@ -10,6 +10,29 @@
 --echo ""
 --exec curl -s -X POST -H "Content-Type: application/json" -d "not valid json" "http://localhost:$REST_PORT/customers" | python3 -c "import sys,json; d=json.load(sys.stdin); print('message' in d)"
 
+# C32b: Content-Length over the 8 MiB cap → 413, rejected on the header alone.
+# curl always sends a body matching the Content-Length it writes, so this needs
+# a hand-written request on a plain socket. Printing the whole status line also
+# pins the reason phrase, which previously rendered as "413 Unknown".
+--write_file $MYSQLTEST_VARDIR/tmp/rest_raw_helper.py
+import json, os, socket
+s = socket.create_connection(('127.0.0.1', int(os.environ['REST_PORT'])), timeout=10)
+s.sendall(b'POST /customers HTTP/1.1\r\nHost: localhost\r\n'
+          b'Content-Type: application/json\r\nContent-Length: 8388609\r\n\r\n')
+buf = b''
+while True:
+    chunk = s.recv(4096)
+    if not chunk:
+        break
+    buf += chunk
+s.close()
+head, _, body = buf.partition(b'\r\n\r\n')
+print(head.split(b'\r\n')[0].decode(errors='replace'))
+print(json.loads(body)['message'])
+EOF
+--exec REST_PORT=$REST_PORT python3 $MYSQLTEST_VARDIR/tmp/rest_raw_helper.py
+--remove_file $MYSQLTEST_VARDIR/tmp/rest_raw_helper.py
+
 # C33: Unknown filter operator → 400.
 --exec curl -s -o /dev/null -w "%{http_code}" "http://localhost:$REST_PORT/customers?age=badop.30"
 --echo ""

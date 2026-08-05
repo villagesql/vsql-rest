@@ -62,8 +62,10 @@ static JwtClaims parse_claims(const std::string& payload_json) {
       claims.sub = j["sub"].get<std::string>();
     if (j.contains("role") && j["role"].is_string())
       claims.role = j["role"].get<std::string>();
-    if (j.contains("exp") && j["exp"].is_number())
+    if (j.contains("exp") && j["exp"].is_number()) {
       claims.exp = j["exp"].get<long long>();
+      claims.has_exp = true;
+    }
     if (j.contains("iat") && j["iat"].is_number())
       claims.iat = j["iat"].get<long long>();
     for (auto& [key, val] : j.items()) {
@@ -79,11 +81,13 @@ static JwtClaims parse_claims(const std::string& payload_json) {
   return claims;
 }
 
-static bool check_expiry(const JwtClaims& claims) {
-  // Fail closed: a token with no exp claim (claims.exp defaults to 0) would
-  // otherwise be accepted forever. Require exp and enforce it.
-  if (claims.exp == 0) return false;
-  return std::time(nullptr) < claims.exp;
+// Returns nullptr when the token is inside its validity window, otherwise the
+// reason it was rejected. Fail closed: a token with no exp claim would
+// otherwise be accepted forever, so a missing exp is a rejection — but it is
+// reported as its own cause, not as an expiry.
+static const char* expiry_error(const JwtClaims& claims) {
+  if (!claims.has_exp) return "token missing exp claim";
+  return std::time(nullptr) < claims.exp ? nullptr : "token expired";
 }
 
 // Split a JWT into header.payload.signature parts.
@@ -129,8 +133,8 @@ static JwtResult verify_hs256_parts(const std::string& hb64,
   std::string payload_json = base64url_decode(pb64);
   res.claims = parse_claims(payload_json);
 
-  if (!check_expiry(res.claims)) {
-    res.error = "token expired";
+  if (const char* e = expiry_error(res.claims)) {
+    res.error = e;
     return res;
   }
 
@@ -185,8 +189,8 @@ static JwtResult verify_rs256_parts(const std::string& hb64,
   std::string payload_json = base64url_decode(pb64);
   res.claims = parse_claims(payload_json);
 
-  if (!check_expiry(res.claims)) {
-    res.error = "token expired";
+  if (const char* e = expiry_error(res.claims)) {
+    res.error = e;
     return res;
   }
 

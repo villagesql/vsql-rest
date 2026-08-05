@@ -33,8 +33,8 @@ SET GLOBAL vsql_rest.jwt_secret = 'test-secret-key';
 SET GLOBAL vsql_rest.require_auth = ON;
 401""
 200
-401
-401
+401 token expired
+401 token missing exp claim
 DROP FUNCTION IF EXISTS test_rest.vsql_rest_jwt_sub;
 DROP VIEW IF EXISTS test_rest.owned;
 CREATE FUNCTION test_rest.vsql_rest_jwt_sub() RETURNS VARCHAR(255)

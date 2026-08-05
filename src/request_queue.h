@@ -35,8 +35,26 @@ struct HttpRequest {
   std::string body;
 };
 
+// HTTP status codes this extension emits. format_http_response() switches over
+// this with no default label, so adding an enumerator here without giving it a
+// reason phrase there is a compile error rather than a "999 Unknown" status
+// line at runtime.
+enum class Status : int {
+  kOk                  = 200,
+  kCreated             = 201,
+  kNoContent           = 204,
+  kBadRequest          = 400,
+  kUnauthorized        = 401,
+  kNotFound            = 404,
+  kMethodNotAllowed    = 405,
+  kConflict            = 409,
+  kContentTooLarge     = 413,
+  kInternalServerError = 500,
+  kServiceUnavailable  = 503,
+};
+
 struct HttpResponse {
-  int status{200};
+  Status status{Status::kOk};
   std::vector<std::pair<std::string, std::string>> headers;
   std::string body;
 };

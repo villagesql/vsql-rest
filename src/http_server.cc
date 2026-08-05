@@ -73,24 +73,26 @@ std::string format_http_response(const HttpResponse& resp) {
   std::string out;
   out.reserve(256 + resp.body.size());
 
-  // Status line.
-  const char* reason = "OK";
+  // Status line. No default label: -Werror=switch turns a new Status without a
+  // reason phrase into a build failure.
+  const char* reason = nullptr;
   switch (resp.status) {
-    case 200: reason = "OK"; break;
-    case 201: reason = "Created"; break;
-    case 204: reason = "No Content"; break;
-    case 400: reason = "Bad Request"; break;
-    case 401: reason = "Unauthorized"; break;
-    case 404: reason = "Not Found"; break;
-    case 405: reason = "Method Not Allowed"; break;
-    case 409: reason = "Conflict"; break;
-    case 500: reason = "Internal Server Error"; break;
-    default:  reason = "Unknown"; break;
+    case Status::kOk:                  reason = "OK"; break;
+    case Status::kCreated:             reason = "Created"; break;
+    case Status::kNoContent:           reason = "No Content"; break;
+    case Status::kBadRequest:          reason = "Bad Request"; break;
+    case Status::kUnauthorized:        reason = "Unauthorized"; break;
+    case Status::kNotFound:            reason = "Not Found"; break;
+    case Status::kMethodNotAllowed:    reason = "Method Not Allowed"; break;
+    case Status::kConflict:            reason = "Conflict"; break;
+    case Status::kContentTooLarge:     reason = "Content Too Large"; break;
+    case Status::kInternalServerError: reason = "Internal Server Error"; break;
+    case Status::kServiceUnavailable:  reason = "Service Unavailable"; break;
   }
 
   char status_line[64];
   snprintf(status_line, sizeof(status_line), "HTTP/1.1 %d %s\r\n",
-           resp.status, reason);
+           static_cast<int>(resp.status), reason);
   out += status_line;
 
   // Required headers.
@@ -201,7 +203,7 @@ static void handle_connection(Conn& conn, RequestQueue* queue) {
     // unbounded req.body allocation (memory-exhaustion DoS). Reject early.
     if (content_length > kMaxRequestBody) {
       HttpResponse resp;
-      resp.status = 413;
+      resp.status = Status::kContentTooLarge;
       resp.body = "{\"message\":\"request body too large\",\"details\":null,"
                   "\"hint\":null,\"code\":\"VSQL0004\"}";
       resp.headers.emplace_back("Content-Type", "application/json");
@@ -240,13 +242,13 @@ static void handle_connection(Conn& conn, RequestQueue* queue) {
       resp = future.get();
     } catch (const std::exception& e) {
       fprintf(stderr, "vsql_rest: request future failed: %s\n", e.what());
-      resp.status = 503;
+      resp.status = Status::kServiceUnavailable;
       resp.body = "{\"message\":\"server shutting down\",\"details\":null,"
                   "\"hint\":null,\"code\":\"VSQL0003\"}";
       resp.headers.emplace_back("Content-Type", "application/json");
     }
   } else {
-    resp.status = 503;
+    resp.status = Status::kServiceUnavailable;
     resp.body = "{\"message\":\"request timed out\",\"details\":null,"
                 "\"hint\":null,\"code\":\"VSQL0002\"}";
     resp.headers.emplace_back("Content-Type", "application/json");
