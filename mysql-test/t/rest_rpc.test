@@ -10,6 +10,29 @@
 --echo ""
 SELECT status FROM test_rest.orders WHERE id = 3;
 
+# Arguments bind by parameter name, not by the order the JSON parser iterates
+# in. The JSON object is a sorted map, so iteration order is alphabetical:
+# "denominator" comes before "numerator" while the routine declares numerator
+# first. Binding by iteration order therefore computed 2/10, not 10/2. Key
+# order in the request body is irrelevant either way.
+CREATE FUNCTION test_rest.divide(numerator INT, denominator INT)
+    RETURNS INT DETERMINISTIC RETURN numerator DIV denominator;
+--sleep 2.5
+--echo # {"numerator":10,"denominator":2} -> 5
+--exec curl -s -X POST -H "Content-Type: application/json" -d '{"numerator":10,"denominator":2}' "http://localhost:$REST_PORT/rpc/divide"
+--echo ""
+--echo # same call, keys reversed -> still 5
+--exec curl -s -X POST -H "Content-Type: application/json" -d '{"denominator":2,"numerator":10}' "http://localhost:$REST_PORT/rpc/divide"
+--echo ""
+
+--echo # A missing parameter is an error, not a silently short argument list.
+--exec curl -s -X POST -H "Content-Type: application/json" -d '{"numerator":10}' "http://localhost:$REST_PORT/rpc/divide"
+--echo ""
+
+--echo # A misspelled parameter is an error, not silently ignored.
+--exec curl -s -X POST -H "Content-Type: application/json" -d '{"numerator":10,"denomintor":2}' "http://localhost:$REST_PORT/rpc/divide"
+--echo ""
+
 # 29/30: Response headers include Content-Type and Content-Length.
 --exec curl -s -D - "http://localhost:$REST_PORT/customers" | grep -iE "^content-type:|^content-length:" | sort | tr -d '\r'
 

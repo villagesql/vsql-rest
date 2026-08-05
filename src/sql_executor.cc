@@ -1011,15 +1011,42 @@ static HttpResponse handle_rpc(vsql::preview_sql_query::Session& session,
     }
   }
 
-  // Build argument list from JSON object.
-  std::string args;
+  // Build the argument list in the routine's declared parameter order. SQL
+  // arguments are positional, and a JSON object has no inherent order — the
+  // parser sorts keys — so binding by iteration order silently passed
+  // arguments to the wrong parameters whenever the caller's key order and the
+  // declared order disagreed.
+  if (!params_json.is_null() && !params_json.is_object()) {
+    resp.status = Status::kBadRequest;
+    resp.body = emit_error("RPC body must be a JSON object of named parameters");
+    return resp;
+  }
+
+  // Unknown keys first: a typo'd name is both an unknown key and the cause of
+  // a missing one, and naming the typo is the more useful of the two errors.
   if (params_json.is_object()) {
-    bool first = true;
     for (auto& [key, val] : params_json.items()) {
-      if (!first) args += ", ";
-      first = false;
-      args += json_val_to_sql_literal(val);
+      (void)val;
+      if (std::find(routine.params.begin(), routine.params.end(), key) ==
+          routine.params.end()) {
+        resp.status = Status::kBadRequest;
+        resp.body = emit_error("unknown parameter: " + key);
+        return resp;
+      }
     }
+  }
+
+  std::string args;
+  for (const auto& pname : routine.params) {
+    if (!args.empty()) args += ", ";
+    auto it = params_json.is_object() ? params_json.find(pname)
+                                      : params_json.end();
+    if (it == params_json.end()) {
+      resp.status = Status::kBadRequest;
+      resp.body = emit_error("missing parameter: " + pname);
+      return resp;
+    }
+    args += json_val_to_sql_literal(*it);
   }
 
   if (routine.kind == RoutineKind::PROCEDURE) {

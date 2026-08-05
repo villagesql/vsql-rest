@@ -54,6 +54,10 @@ enum class RoutineKind { FUNCTION, PROCEDURE };
 struct RoutineInfo {
   std::string name;
   RoutineKind kind{RoutineKind::FUNCTION};
+  // Parameter names in declared order. RPC arguments are positional in SQL, so
+  // this is what lets a JSON object be bound by name instead of by the order
+  // the JSON parser happens to iterate in.
+  std::vector<std::string> params;
 };
 
 }  // namespace vsql_rest

@@ -34,6 +34,16 @@ SET GLOBAL vsql_rest.vsql_rest_enabled = ON;
 SELECT status FROM test_rest.orders WHERE id = 3;
 status
 shipped
+CREATE FUNCTION test_rest.divide(numerator INT, denominator INT)
+RETURNS INT DETERMINISTIC RETURN numerator DIV denominator;
+# {"numerator":10,"denominator":2} -> 5
+5""
+# same call, keys reversed -> still 5
+5""
+# A missing parameter is an error, not a silently short argument list.
+{"message":"missing parameter: denominator","details":null,"hint":null,"code":"VSQL0001"}""
+# A misspelled parameter is an error, not silently ignored.
+{"message":"unknown parameter: denomintor","details":null,"hint":null,"code":"VSQL0001"}""
 Content-Length: 180
 Content-Type: application/json
 SET GLOBAL vsql_rest.vsql_rest_enabled = OFF;

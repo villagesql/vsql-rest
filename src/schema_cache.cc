@@ -124,6 +124,28 @@ bool SchemaCache::refresh(vsql::preview_sql_query::Session& session,
     }
   }
 
+  // --- Routine parameters ---
+  // ORDINAL_POSITION 0 is a function's return value, not a parameter.
+  std::string prm_sql =
+      "SELECT SPECIFIC_NAME, PARAMETER_NAME "
+      "FROM INFORMATION_SCHEMA.PARAMETERS "
+      "WHERE SPECIFIC_SCHEMA = '" + schema_name + "' "
+      "AND ORDINAL_POSITION > 0 "
+      "ORDER BY SPECIFIC_NAME, ORDINAL_POSITION";
+
+  auto prm_result = session.sql(prm_sql).execute();
+  if (!prm_result.has_error()) {
+    while (prm_result.next()) {
+      auto rname = prm_result.column_str(0);
+      auto pname = prm_result.column_str(1);
+      if (!rname.data() || !pname.data()) continue;
+      auto it = new_routines.find(std::string(rname));
+      if (it != new_routines.end()) {
+        it->second.params.emplace_back(pname);
+      }
+    }
+  }
+
   std::lock_guard<std::mutex> lock(mu_);
   tables_ = std::move(new_tables);
   routines_ = std::move(new_routines);
