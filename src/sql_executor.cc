@@ -80,6 +80,17 @@ std::string mysql_escape(const std::string& s) {
   return out;
 }
 
+// True when every character can appear in an unquoted MySQL user-variable
+// name. Used for JWT claim names, which are interpolated as identifiers where
+// value escaping offers no protection.
+static bool is_identifier(const std::string& s) {
+  if (s.empty()) return false;
+  for (unsigned char c : s) {
+    if (!(std::isalnum(c) || c == '_')) return false;
+  }
+  return true;
+}
+
 std::string backtick(const std::string& name) {
   std::string out;
   out.reserve(name.size() * 2 + 2);
@@ -1158,7 +1169,11 @@ HttpResponse execute_request(vsql::preview_sql_query::Session& session,
   auto it = req.headers.find("authorization");
   if (it != req.headers.end()) {
     const std::string& auth = it->second;
-    if (auth.size() > 7 && auth.compare(0, 7, "Bearer ") == 0) {
+    // RFC 9110 makes the auth scheme case-insensitive; "bearer <token>" is a
+    // valid request that must not be treated as an absent credential.
+    std::string scheme = auth.substr(0, std::min<size_t>(auth.size(), 7));
+    std::transform(scheme.begin(), scheme.end(), scheme.begin(), ::tolower);
+    if (auth.size() > 7 && scheme == "bearer ") {
       std::string token = auth.substr(7);
       auto jwt_res = verify_jwt(token, jwt_secret, jwt_pubkey_path);
       if (!jwt_res.ok) {
@@ -1169,28 +1184,43 @@ HttpResponse execute_request(vsql::preview_sql_query::Session& session,
       claims = jwt_res.claims;
       authed = true;
 
-      // Inject JWT claims as MySQL user variables.
-      if (!claims.sub.empty()) {
-        auto sv = session.sql(
-            "SET @vsql_rest_jwt_sub = '" + mysql_escape(claims.sub) + "'").execute();
-        (void)sv;
-      }
-      if (!claims.role.empty()) {
-        auto sv = session.sql(
-            "SET @vsql_rest_jwt_role = '" + mysql_escape(claims.role) + "'").execute();
-        (void)sv;
-      }
+      // Inject JWT claims as MySQL user variables. set_jwt_var() reports a
+      // failed SET rather than dropping it: with claim names validated, a
+      // failure here means something unexpected about the session, not bad
+      // input, and silently continuing would leave a view filtering on a stale
+      // or unset variable.
+      auto set_jwt_var = [&session](const std::string& suffix,
+                                    const std::string& value) {
+        auto sv = session.sql("SET @vsql_rest_jwt_" + suffix + " = '" +
+                              mysql_escape(value) + "'").execute();
+        if (sv.has_error()) {
+          fprintf(stderr, "vsql_rest: failed to set @vsql_rest_jwt_%s: %.*s\n",
+                  suffix.c_str(), static_cast<int>(sv.error().message.size()),
+                  sv.error().message.data());
+        }
+      };
+
+      if (!claims.sub.empty()) set_jwt_var("sub", claims.sub);
+      if (!claims.role.empty()) set_jwt_var("role", claims.role);
       for (const auto& [k, v] : claims.extra) {
-        auto sv = session.sql(
-            "SET @vsql_rest_jwt_" + mysql_escape(k) + " = '" +
-            mysql_escape(v) + "'").execute();
-        (void)sv;
+        // The claim name becomes part of a SQL identifier, where escaping does
+        // nothing: mysql_escape() leaves ',', '=' and spaces intact, so a
+        // crafted name such as "a = 1, GLOBAL sql_mode" would turn this into a
+        // valid multi-target SET. Only inject names that are identifiers.
+        // Namespaced claims (an issuer's "https://example.com/roles") are
+        // skipped rather than producing a syntax error that was previously
+        // discarded unseen.
+        if (!is_identifier(k)) continue;
+        set_jwt_var(k, v);
       }
     }
   }
 
   if (!authed) {
     resp.status = Status::kUnauthorized;
+    // RFC 9110 requires a challenge on 401 so a client knows how to
+    // authenticate rather than having to guess the scheme.
+    resp.headers.emplace_back("WWW-Authenticate", "Bearer");
     resp.body = emit_error("authentication required");
     return resp;
   }

@@ -63,6 +63,20 @@ elif action == "noexp_401":
     tok = make_token({"sub": "alice@example.com"})
     print(curl_code_msg("/customers", token=tok))
 
+elif action == "lowercase_bearer_200":
+    tok = make_token({"sub": "alice@example.com", "exp": int(time.time()) + 3600})
+    cmd = ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
+           "-H", f"authorization: bearer {tok}", BASE + "/customers"]
+    print(subprocess.run(cmd, capture_output=True, text=True).stdout.strip())
+
+elif action == "hostile_claim_name":
+    # A claim name is interpolated as a SQL identifier, where value escaping
+    # does nothing. This one would extend the SET into a second assignment.
+    tok = make_token({"sub": "alice@example.com",
+                      "exp": int(time.time()) + 3600,
+                      "a = 1, GLOBAL sql_mode": "ANSI_QUOTES"})
+    print(curl_code("/customers", token=tok))
+
 elif action == "view_filter":
     tok = make_token({"sub": "alice@example.com", "exp": int(time.time()) + 3600})
     d = curl_json("/owned", token=tok)

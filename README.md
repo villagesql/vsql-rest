@@ -142,7 +142,10 @@ curl -X POST -H 'Content-Type: application/json' \
 
 ### RPC: `POST /rpc/routine_name`
 
-Calls a stored function or DML stored procedure. Pass parameters as a JSON object.
+Calls a stored function or DML stored procedure. Pass parameters as a JSON
+object keyed by parameter name; keys are matched to the routine's declared
+parameters, so key order in the body does not matter. A missing parameter or a
+name the routine does not declare is a `400` — neither is silently ignored.
 
 ```bash
 # Stored function — returns scalar
@@ -207,6 +210,11 @@ A token whose `exp` is in the past reports the expiry instead:
 | `sub` | `@vsql_rest_jwt_sub` |
 | `role` | `@vsql_rest_jwt_role` |
 | Any string claim | `@vsql_rest_jwt_<claim>` |
+
+Only claim names made up of letters, digits, and underscores are injected. A
+claim name becomes part of a SQL identifier, where value escaping offers no
+protection, so anything else is skipped — including namespaced claims such as
+an issuer's `https://example.com/roles`.
 
 These can be used for row-level filtering via views. MySQL views cannot reference user variables directly; use a helper function:
 
@@ -326,6 +334,7 @@ For production deployments, a TLS-terminating reverse proxy (nginx, Caddy) in fr
 - **JWT secret exposure** — `vsql_rest.jwt_secret` is visible as plaintext in `SHOW GLOBAL VARIABLES`. On shared or audited servers, use RS256 instead: set `vsql_rest.jwt_public_key` to a PEM file path. The public key path is not sensitive.
 - **TLS in production** — the built-in HTTPS listener is suitable for development and internal use. For production, a TLS-terminating reverse proxy (nginx, Caddy) in front of the plain HTTP port gives you certificate rotation, OCSP stapling, and modern cipher control without restarting the extension.
 - **SQL injection** — user-supplied values are escaped via `mysql_escape()` before interpolation. Table and column names are validated against the schema cache whitelist and never taken directly from request input. Because that escaping is backslash-based, `NO_BACKSLASH_ESCAPES` would defeat it (`\'` would leave the quote live), so the extension strips that mode from its own internal session at session open; other modes, such as strict mode, are preserved. The security guarantee depends on all three: if you find a bypass, please report it.
+- **Configure one JWT algorithm, not both** — the algorithm is taken from the token's `alg` header, so if both `jwt_secret` and `jwt_public_key` are set, tokens signed either way are accepted and the weaker of the two secrets sets your effective security. Set exactly one.
 - **Network exposure** — vsql_rest listens on all interfaces by default. In production, bind the database host to a private network or use firewall rules to restrict access to the REST port.
 
 ## Testing
