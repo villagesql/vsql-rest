@@ -11,6 +11,12 @@ SET GLOBAL vsql_rest.port = 3000;
 SET GLOBAL vsql_rest.vsql_rest_enabled = ON;
 ```
 
+> **This Quickstart is not a deployment.** Those four statements expose every
+> table in `mydb` for unauthenticated read *and* write on all interfaces. Before
+> anything reachable by others, set `vsql_rest.require_auth` and restrict
+> `vsql_rest.allowed_tables` / `vsql_rest.allowed_routines` — see
+> [Access Control](#access-control) and [Authentication](#authentication).
+
 ```bash
 # Read
 curl 'http://localhost:3000/orders?status=eq.pending&order=total.desc&limit=10'
@@ -27,6 +33,23 @@ curl -X POST -H 'Content-Type: application/json' \
 
 > **Preview APIs:** `vsql_rest` uses four VEF preview APIs (`thread_worker`, `sql_query`, `sys_var`, `status_var`) that may change API or ABI between VillageSQL releases. It's suitable for development and internal tooling — expect possible breaking changes when upgrading the server.
 
+## Installation
+
+If you installed VillageSQL with the install script, the Docker image, or a
+release tarball, `vsql_rest.veb` is already in the server's `lib/veb/`
+directory — this extension is bundled with the server. There is nothing to build
+or download:
+
+```sql
+INSTALL EXTENSION vsql_rest;
+```
+
+The server must have been started with `--vsql_allow_preview_extensions=ON`, or
+this fails — see the preview note above.
+
+Build from source only if you built the server from source without the bundled
+extensions, or if you are working on this extension itself.
+
 ## Building
 
 **Linux:**
@@ -37,7 +60,7 @@ VillageSQL_BUILD_DIR=$HOME/build/villagesql bash build.sh
 **macOS:**
 ```bash
 cmake -S . -B build \
-  -DVillageSQL_BUILD_DIR=~/.villagesql/build \
+  -DVillageSQL_BUILD_DIR="$HOME/.villagesql/build" \
   -DOPENSSL_ROOT_DIR=/opt/homebrew/opt/openssl@3
 cmake --build build
 cmake --install build
@@ -219,9 +242,11 @@ an issuer's `https://example.com/roles`.
 These can be used for row-level filtering via views. MySQL views cannot reference user variables directly; use a helper function:
 
 ```sql
+DELIMITER $$
 CREATE FUNCTION vsql_rest_jwt_sub() RETURNS VARCHAR(255)
 NOT DETERMINISTIC READS SQL DATA
-BEGIN RETURN @vsql_rest_jwt_sub; END;
+BEGIN RETURN @vsql_rest_jwt_sub; END$$
+DELIMITER ;
 
 CREATE VIEW my_view AS
   SELECT * FROM customers WHERE email = vsql_rest_jwt_sub();
@@ -299,7 +324,7 @@ For production deployments, a TLS-terminating reverse proxy (nginx, Caddy) in fr
 
 8. **`jwt_secret` visible as plaintext in `SHOW GLOBAL VARIABLES`** — VEF does not support masked sys vars. Avoid setting `vsql_rest.jwt_secret` on shared or audited servers; use RS256 (`jwt_public_key`) instead, since the public key path is not sensitive.
 
-9. **Extension upgrade path** — no `ALTER EXTENSION` command. Version upgrades require `UNINSTALL EXTENSION vsql_rest` then `INSTALL EXTENSION vsql_rest`. Tracked: [#12 Extension upgrades](https://github.com/villagesql/villagesql-server/issues/12) — 👍 it to signal demand.
+9. **Extension upgrades need a restart** — `ALTER EXTENSION vsql_rest VERSION '<v>' AT RESTART` stages a version change that takes effect at the next server restart; there is no way to apply one to a running server. `UNINSTALL EXTENSION vsql_rest` then `INSTALL EXTENSION vsql_rest` also works. Tracked: [#12 Extension upgrades](https://github.com/villagesql/villagesql-server/issues/12) — 👍 it to signal demand.
 
 10. **Request bodies are capped at 8 MiB** — the cap bounds the allocation driven
     by a client-supplied `Content-Length`, so an oversized header cannot exhaust
