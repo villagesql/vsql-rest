@@ -4,6 +4,9 @@ Turns a VillageSQL database schema into a live HTTP/HTTPS REST API. Install
 the extension, point it at a schema, and your tables are immediately
 accessible as endpoints — no code required.
 
+**Docs:** [VillageSQL documentation](https://villagesql.com/docs) ·
+[Install VillageSQL Server](https://villagesql.com/install)
+
 ```sql
 INSTALL EXTENSION vsql_rest;
 SET GLOBAL vsql_rest.schema = 'mydb';
