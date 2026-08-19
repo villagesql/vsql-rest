@@ -13,6 +13,7 @@ PORT     = int(os.environ['REST_PORT'])
 DEADLINE = int(os.environ['DEADLINE'])
 TMP      = os.environ['REST_TMP']
 READY    = os.path.join(TMP, 'parked.ready')
+DONE     = os.path.join(TMP, 'parked.done')
 LOG      = os.path.join(TMP, 'halfopen.log')
 
 def log(msg):
@@ -48,8 +49,9 @@ elif action == 'park_launcher':
     # Foreground launcher: spawn the parked connection in a detached child and
     # do not return until the child reports it is connected. MTR blocks on this
     # exec, so the connection is established before the next test line runs.
-    if os.path.exists(READY):
-        os.remove(READY)
+    for stale in (READY, DONE):
+        if os.path.exists(stale):
+            os.remove(stale)
     child = subprocess.Popen([sys.executable, __file__, 'park_child'],
                              start_new_session=True,
                              stdout=subprocess.DEVNULL,
@@ -88,6 +90,25 @@ elif action == 'park_child':
         s.close()
     except Exception as e:
         log('child failed: %s' % e)
+    finally:
+        # Last write of the run. park_reap waits for this, so the test's
+        # cleanup cannot race the log() calls above.
+        with open(DONE, 'w') as f:
+            f.write('done\n')
+
+elif action == 'park_reap':
+    # Wait for the detached child to finish writing. Its recv() blocks for
+    # seconds after parked.go is written, and every log() call recreates
+    # halfopen.log -- so removing the file before the child is done leaves a
+    # stray file behind and MTR's check-testcase fails the test.
+    for _ in range(600):          # 60s ceiling, well above the child's recv
+        if os.path.exists(DONE):
+            sys.exit(0)
+        time.sleep(0.1)
+    sys.stderr.write('parked child never finished; child log:\n')
+    if os.path.exists(LOG):
+        sys.stderr.write(open(LOG).read())
+    sys.exit(1)
 EOF
 
 --echo # Case 1: a client that drags out a request is disconnected.
@@ -103,7 +124,11 @@ SET GLOBAL vsql_rest.vsql_rest_enabled = OFF;
 --write_file $MYSQLTEST_VARDIR/tmp/parked.go
 go
 EOF
---sleep 3
+
+# Wait for the child to finish rather than sleeping a fixed interval: it holds
+# the connection open for its recv() timeout, and the assertions below are only
+# meaningful once it has completed the request against the torn-down queue.
+--exec REST_PORT=$REST_PORT DEADLINE=20 REST_TMP=$MYSQLTEST_VARDIR/tmp python3 $MYSQLTEST_VARDIR/tmp/rest_halfopen.py park_reap
 
 --echo # Server survived the disable:
 SELECT 1 AS alive;
@@ -117,6 +142,7 @@ SET GLOBAL vsql_rest.vsql_rest_enabled = ON;
 --remove_file $MYSQLTEST_VARDIR/tmp/rest_halfopen.py
 --remove_file $MYSQLTEST_VARDIR/tmp/parked.ready
 --remove_file $MYSQLTEST_VARDIR/tmp/parked.go
+--remove_file $MYSQLTEST_VARDIR/tmp/parked.done
 --remove_file $MYSQLTEST_VARDIR/tmp/halfopen.log
 
 --source rest_teardown.inc
