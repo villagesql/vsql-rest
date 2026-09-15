@@ -218,14 +218,45 @@ static vef_next_wakeup_t rest_worker(vef_wakeup_reason_t reason,
       g_ssl_listen_fd = ssl_fd;
       g_https_port_actual = (ssl_fd >= 0) ? ssl_port : 0;
 
-      g_accept_thread = std::thread(vsql_rest::accept_loop,
-                                    g_listen_fd, nullptr,
-                                    g_queue, &g_running);
-      if (g_ssl_listen_fd >= 0) {
-        g_ssl_accept_thread = std::thread(vsql_rest::accept_loop,
-                                          g_ssl_listen_fd,
-                                          g_tls_ctx.get(),
-                                          g_queue, &g_running);
+      // std::thread's constructor can throw std::system_error (e.g. EAGAIN
+      // when the process/thread-count limit is hit) -- a real condition
+      // under load, not exotic. The VEF SDK does not catch exceptions at the
+      // thread_worker entry-point boundary, so an escaping exception here
+      // would crash the whole server rather than just fail this ENABLE.
+      // accept_loop() itself already guards its own per-connection
+      // std::thread(...) the same way (http_server.cc); this brings ENABLE's
+      // two accept-thread constructions in line with that.
+      try {
+        g_accept_thread = std::thread(vsql_rest::accept_loop,
+                                      g_listen_fd, nullptr,
+                                      g_queue, &g_running);
+        if (g_ssl_listen_fd >= 0) {
+          g_ssl_accept_thread = std::thread(vsql_rest::accept_loop,
+                                            g_ssl_listen_fd,
+                                            g_tls_ctx.get(),
+                                            g_queue, &g_running);
+        }
+      } catch (const std::exception &e) {
+        fprintf(stderr, "[vsql_rest] failed to start accept thread: %s\n",
+                e.what());
+        g_running.store(false, std::memory_order_relaxed);
+        if (g_listen_fd >= 0) {
+          shutdown(g_listen_fd, SHUT_RDWR);
+          close(g_listen_fd);
+          g_listen_fd = -1;
+        }
+        if (g_ssl_listen_fd >= 0) {
+          shutdown(g_ssl_listen_fd, SHUT_RDWR);
+          close(g_ssl_listen_fd);
+          g_ssl_listen_fd = -1;
+        }
+        if (g_accept_thread.joinable()) g_accept_thread.join();
+        if (g_ssl_accept_thread.joinable()) g_ssl_accept_thread.join();
+        g_tls_ctx.reset();
+        g_queue.reset();
+        g_http_port_actual = 0;
+        g_https_port_actual = 0;
+        return {};
       }
 
       // Re-arm on signal pipe with 50ms fallback.

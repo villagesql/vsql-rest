@@ -35,4 +35,20 @@ SELECT COUNT(*) FROM test_rest.orders WHERE id = 5;
 --exec curl -s -o /dev/null -w "%{http_code}" -X PATCH -H "Content-Type: application/json" -d '{"age":99}' "http://localhost:$REST_PORT/customers"
 --echo ""
 
+# Exception-guard regression: a body field whose JSON value is itself an
+# object/array (rather than null/string/int/float/bool) goes through
+# json_val_to_sql_literal's val.dump() fallback branch. An unpaired \uXXXX
+# surrogate escape inside that nested value is accepted by json::parse() but
+# previously made dump() throw (strict error handler), unguarded, at a VDF
+# entry point the SDK does not catch exceptions at -- this would have crashed
+# the whole server rather than just rejected the one request. It now uses the
+# 'replace' error handler, so this must return an ordinary HTTP response
+# (whatever MySQL makes of the resulting literal), not hang or drop the
+# connection.
+--exec curl -s -o /dev/null -w "%{http_code}" -X POST -H "Content-Type: application/json" -d '{"name":{"a":"\ud800"},"email":"z@example.com","age":1}' "http://localhost:$REST_PORT/customers"
+--echo ""
+# Server must still be alive and serving after that request.
+--exec curl -s -o /dev/null -w "%{http_code}" "http://localhost:$REST_PORT/customers?id=eq.1"
+--echo ""
+
 --source rest_teardown.inc

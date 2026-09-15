@@ -140,7 +140,20 @@ static std::string json_val_to_sql_literal(const nlohmann::json& val) {
   if (val.is_number_integer())   return std::to_string(val.get<long long>());
   if (val.is_number_float())     return std::to_string(val.get<double>());
   if (val.is_boolean())          return val.get<bool>() ? "1" : "0";
-  return "'" + mysql_escape(val.dump()) + "'";
+  // val.dump() defaults to error_handler_t::strict and throws
+  // nlohmann::detail::type_error if the value holds invalid UTF-8 (reachable:
+  // parse() accepts an unpaired \uXXXX surrogate that dump() then rejects).
+  // The VEF SDK does not catch exceptions at the VDF entry-point boundary, so
+  // an escaping exception here would crash the whole server rather than fail
+  // just this one request -- ask dump() to replace invalid sequences instead
+  // of throwing, and keep the try/catch as defense-in-depth for any other
+  // allocation failure in this function.
+  try {
+    return "'" + mysql_escape(val.dump(
+        -1, ' ', false, nlohmann::json::error_handler_t::replace)) + "'";
+  } catch (...) {
+    return "'[unrepresentable value]'";
+  }
 }
 
 // --- Filter parsing ---

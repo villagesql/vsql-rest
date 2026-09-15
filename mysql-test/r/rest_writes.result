@@ -50,6 +50,8 @@ COUNT(*)
 0
 400""
 400""
+400""
+200""
 SET GLOBAL vsql_rest.vsql_rest_enabled = OFF;
 UNINSTALL EXTENSION vsql_rest;
 DROP DATABASE IF EXISTS test_rest;
