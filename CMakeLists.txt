@@ -49,6 +49,15 @@ add_library(vsql_rest SHARED
 # build failure, not a "999 Unknown" status line at runtime.
 target_compile_options(vsql_rest PRIVATE -Werror=switch)
 
+# picohttpparser's SSE4.2 header scan compiles to VEX-encoded vpcmpestri when
+# AVX is on, which Valgrind cannot decode -- SIGILL on the first HTTP request.
+# -mno-avx keeps the SIMD path and emits the legacy encoding, which it can.
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang"
+   AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|i[3-6]86)$")
+    set_source_files_properties(src/third_party/picohttpparser.c
+        PROPERTIES COMPILE_OPTIONS -mno-avx)
+endif()
+
 # include-dev must come before include so preview headers take precedence
 # over older protocol headers in the stable include tree
 target_include_directories(vsql_rest PRIVATE
