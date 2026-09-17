@@ -344,6 +344,13 @@ static vef_next_wakeup_t rest_worker(vef_wakeup_reason_t reason,
       if (g_accept_thread.joinable()) g_accept_thread.join();
       if (g_ssl_accept_thread.joinable()) g_ssl_accept_thread.join();
 
+      // Detached connection threads outlive the accept loop and run code from
+      // this library, which UNINSTALL is free to unload once DISABLE returns.
+      if (!vsql_rest::drain_connections()) {
+        fprintf(stderr,
+                "[vsql_rest] timed out waiting for connection threads\n");
+      }
+
       g_tls_ctx.reset();
 
       g_queue.reset();

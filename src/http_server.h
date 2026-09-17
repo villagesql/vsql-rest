@@ -35,6 +35,9 @@ int create_listen_socket(int port, int* bound_port = nullptr);
 // Format an HttpResponse as a raw HTTP/1.1 response string.
 std::string format_http_response(const HttpResponse& resp);
 
+// Wait for detached connection threads to finish. False on timeout.
+bool drain_connections();
+
 // Accept loop: calls accept() on listen_fd in a loop. For each accepted
 // connection, spawns a detached std::thread that reads one HTTP request,
 // pushes it onto the queue, waits for the response, and sends it back.

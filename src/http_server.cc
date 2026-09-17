@@ -28,6 +28,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "third_party/picohttpparser.h"
@@ -59,6 +60,15 @@ static bool request_expired(SteadyClock::time_point started) {
 // Ceiling on live connection threads. The read deadline bounds how long any
 // one connection can hold a thread; this bounds how many can do so at once.
 static constexpr int kMaxConnections = 128;
+
+// Ceiling on how long the SQL executor may take to fulfill one request.
+// Memcheck slows execution by more than an order of magnitude, so the normal
+// value would expire on work that is merely slow rather than stuck.
+#ifdef VSQL_VALGRIND
+static constexpr int kRequestTimeoutSeconds = 120;
+#else
+static constexpr int kRequestTimeoutSeconds = 30;
+#endif
 
 static std::atomic<int> g_active_connections{0};
 
@@ -291,7 +301,7 @@ static void handle_connection(Conn& conn, RequestQueue* queue) {
   auto future = queue->enqueue(std::move(req));
 
   // Wait for the SQL executor to fulfill the response (with timeout).
-  auto status = future.wait_for(std::chrono::seconds(30));
+  auto status = future.wait_for(std::chrono::seconds(kRequestTimeoutSeconds));
   HttpResponse resp;
   if (status == std::future_status::ready) {
     // future.get() throws if the queue was destroyed during shutdown
@@ -316,6 +326,21 @@ static void handle_connection(Conn& conn, RequestQueue* queue) {
 
   std::string raw_resp = format_http_response(resp);
   conn.write_all(raw_resp.data(), static_cast<int>(raw_resp.size()));
+}
+
+// Connection threads are detached, so DISABLE has nothing to join. It must
+// still wait for them: UNINSTALL may unload this library while one is midway
+// through code that lives in it.
+bool drain_connections() {
+  // A thread can be parked in the request wait, so allow for that plus slack.
+  const auto deadline =
+      SteadyClock::now() + std::chrono::seconds(kRequestTimeoutSeconds + 5);
+  while (g_active_connections.load(std::memory_order_relaxed) > 0) {
+    if (SteadyClock::now() > deadline)
+      return false;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return true;
 }
 
 void accept_loop(int listen_fd, SSL_CTX* ssl_ctx,
