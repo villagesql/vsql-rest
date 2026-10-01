@@ -55,21 +55,12 @@ extensions, or if you are working on this extension itself.
 
 ## Building
 
-**Linux:**
 ```bash
 VillageSQL_BUILD_DIR=$HOME/build/villagesql bash build.sh
 ```
 
-**macOS:**
-```bash
-cmake -S . -B build \
-  -DVillageSQL_BUILD_DIR="$HOME/.villagesql/build" \
-  -DOPENSSL_ROOT_DIR=/opt/homebrew/opt/openssl@3
-cmake --build build
-cmake --install build
-```
-
 Requires OpenSSL. Install on macOS with Homebrew: `brew install openssl@3`.
+It is detected automatically; override with `-DOPENSSL_ROOT_DIR=...`.
 
 ## Installing
 
