@@ -20,14 +20,8 @@ Install name: `vsql_rest`. Repo/directory name: `vsql-rest`.
 VillageSQL_BUILD_DIR=/path/to/villagesql/build bash build.sh
 ```
 
-Requires OpenSSL. On macOS:
-```bash
-cmake -S . -B build \
-  -DVillageSQL_BUILD_DIR=/path/to/build \
-  -DOPENSSL_ROOT_DIR=/opt/homebrew/opt/openssl@3
-cmake --build build
-cmake --install build
-```
+Requires OpenSSL. On macOS, Homebrew's `openssl@3` is detected automatically
+via its stable `opt/` prefix; override with `-DOPENSSL_ROOT_DIR=...`.
 
 ## Install and enable
 
