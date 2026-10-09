@@ -73,6 +73,9 @@ perl mysql-test-run.pl \
 | `rest_auth.test` | 401 with no token, 200 with valid HS256 JWT, 401 with expired JWT, JWT sub injected as user variable (C36-C40) |
 | `rest_https.test` | HTTPS on ssl_port, HTTP and HTTPS simultaneous (C41-C42) |
 | `rest_discovery.test` | GET / returns OpenAPI-compatible definitions (C43) |
+| `rest_empty_schema.test` | Immediate 503 with code VSQL0007 when `vsql_rest.schema` is empty (C44) |
+| `rest_schema_cache.test` | A changed `vsql_rest.schema`, a restart, and a reinstall each rebuild the schema cache at once |
+| `rest_var_churn.test` | Correct answers while `vsql_rest.schema` and `allowed_tables` change under load; an unreadable allowlist refuses requests |
 
 ## Shared includes
 

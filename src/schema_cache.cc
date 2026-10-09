@@ -106,7 +106,7 @@ bool SchemaCache::refresh(vsql::preview_sql_query::Session& session,
   std::string rtn_sql =
       "SELECT ROUTINE_NAME, ROUTINE_TYPE "
       "FROM INFORMATION_SCHEMA.ROUTINES "
-      "WHERE ROUTINE_SCHEMA = '" + schema_name + "'";
+      "WHERE ROUTINE_SCHEMA = '" + esc_schema + "'";
 
   auto rtn_result = session.sql(rtn_sql).execute();
   if (!rtn_result.has_error()) {
@@ -129,7 +129,7 @@ bool SchemaCache::refresh(vsql::preview_sql_query::Session& session,
   std::string prm_sql =
       "SELECT SPECIFIC_NAME, PARAMETER_NAME "
       "FROM INFORMATION_SCHEMA.PARAMETERS "
-      "WHERE SPECIFIC_SCHEMA = '" + schema_name + "' "
+      "WHERE SPECIFIC_SCHEMA = '" + esc_schema + "' "
       "AND ORDINAL_POSITION > 0 "
       "ORDER BY SPECIFIC_NAME, ORDINAL_POSITION";
 
@@ -149,6 +149,7 @@ bool SchemaCache::refresh(vsql::preview_sql_query::Session& session,
   std::lock_guard<std::mutex> lock(mu_);
   tables_ = std::move(new_tables);
   routines_ = std::move(new_routines);
+  schema_name_ = schema_name;
   last_refresh_ = std::time(nullptr);
   populated_ = true;
   return true;
@@ -157,14 +158,27 @@ bool SchemaCache::refresh(vsql::preview_sql_query::Session& session,
 bool SchemaCache::refresh_if_needed(vsql::preview_sql_query::Session& session,
                                     const std::string& schema_name,
                                     int ttl_seconds) {
+  bool other_schema;
   {
     std::lock_guard<std::mutex> lock(mu_);
-    if (populated_) {
+    other_schema = schema_name_ != schema_name;
+    if (populated_ && !other_schema) {
       auto age = std::difftime(std::time(nullptr), last_refresh_);
       if (age < ttl_seconds) return true;
     }
   }
+  // If the refresh fails, requests must not be checked against the tables of
+  // a schema that is no longer exposed.
+  if (other_schema) clear();
   return refresh(session, schema_name);
+}
+
+void SchemaCache::clear() {
+  std::lock_guard<std::mutex> lock(mu_);
+  tables_.clear();
+  routines_.clear();
+  schema_name_.clear();
+  populated_ = false;
 }
 
 bool SchemaCache::table_exists(const std::string& name) const {

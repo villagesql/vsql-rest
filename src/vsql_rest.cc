@@ -35,6 +35,7 @@
 #include <unistd.h>
 
 #include "http_server.h"
+#include "json_emit.h"
 #include "request_queue.h"
 #include "schema_cache.h"
 #include "sql_executor.h"
@@ -45,7 +46,8 @@
 
 namespace {
 
-// Sys var backing storage. Written by the server when SET GLOBAL fires.
+// Sys var backing storage. Written by the server when SET GLOBAL fires. The
+// char* variables are never dereferenced here: read them with read_str_var().
 static long long g_port        = 3000;
 static long long g_ssl_port    = 3443;
 static char*     g_ssl_cert    = nullptr;
@@ -117,6 +119,15 @@ static auto g_status_vars = stv::make_capability({
   stv::make_int("https_port",        &g_https_port_actual),
 });
 
+// String sys vars are registered PLUGIN_VAR_MEMALLOC, so a SET GLOBAL frees the
+// old buffer from its own thread while this extension may be reading it. get()
+// asks the server, which copies the value under LOCK_global_system_variables.
+// It fails for a value of 1023 bytes or more (the server reads into a 1 KiB
+// buffer), so callers must treat false as an error, not as an empty value.
+static bool read_str_var(const char* name, std::string& out) {
+  return !g_sys_vars.get("vsql_rest", name, out);
+}
+
 // ============================================================================
 // Access-control config parsers
 // ============================================================================
@@ -169,6 +180,21 @@ parse_table_methods(const char* sv) {
 // Thread worker callback
 // ============================================================================
 
+// Answers each request with an error. Each connection thread waits on its
+// request's promise (handle_connection in http_server.cc), so a wakeup that
+// cannot run requests must still answer them; the undrained signal pipe would
+// also keep the poll fd readable.
+static void reject(std::vector<vsql_rest::PendingRequest> pending,
+                   vsql_rest::Status status, const std::string& message,
+                   std::string_view code = "VSQL0001") {
+  for (auto& p : pending) {
+    vsql_rest::HttpResponse resp;
+    resp.status = status;
+    resp.body = vsql_rest::emit_error(message, code);
+    p.promise.set_value(std::move(resp));
+  }
+}
+
 static vef_next_wakeup_t rest_worker(vef_wakeup_reason_t reason,
                                      vef_thread_handle_t* handle,
                                      void* /*arg*/) {
@@ -190,8 +216,13 @@ static vef_next_wakeup_t rest_worker(vef_wakeup_reason_t reason,
 
       int ssl_fd = -1;
       int ssl_port = 0;
-      std::string cert = g_ssl_cert ? g_ssl_cert : "";
-      std::string key  = g_ssl_key  ? g_ssl_key  : "";
+      std::string cert;
+      std::string key;
+      if (!read_str_var("ssl_cert", cert) || !read_str_var("ssl_key", key)) {
+        fprintf(stderr, "[vsql_rest] cannot read ssl_cert or ssl_key\n");
+        close(http_fd);
+        return {};
+      }
       if (!cert.empty() && !key.empty()) {
         std::string tls_err;
         if (!g_tls_ctx.init(cert, key, tls_err)) {
@@ -265,14 +296,32 @@ static vef_next_wakeup_t rest_worker(vef_wakeup_reason_t reason,
 
     case VEF_WAKEUP_POLL_FD:
     case VEF_WAKEUP_PERIODIC: {
-      if (!g_queue || !handle) return {};
+      if (!g_queue) return {};
 
-      std::string schema_name = g_schema ? g_schema : "";
-      if (schema_name.empty()) return {};
+      std::string schema_name;
+      if (!read_str_var("schema", schema_name)) {
+        reject(g_queue->drain(), vsql_rest::Status::kInternalServerError,
+               "cannot read vsql_rest.schema");
+        return {};
+      }
+      if (schema_name.empty()) {
+        reject(g_queue->drain(), vsql_rest::Status::kServiceUnavailable,
+               "vsql_rest.schema is not set", "VSQL0007");
+        return {};
+      }
 
       // Open SQL session for this wakeup.
+      if (!handle) {
+        reject(g_queue->drain(), vsql_rest::Status::kServiceUnavailable,
+               "SQL session unavailable");
+        return {};
+      }
       auto session = g_sql_query_cap.open(handle);
-      if (!session) return {};
+      if (!session) {
+        reject(g_queue->drain(), vsql_rest::Status::kServiceUnavailable,
+               "SQL session unavailable");
+        return {};
+      }
 
       // The SQL executor escapes user input with backslash escaping. If the
       // server runs with NO_BACKSLASH_ESCAPES that escaping is defeated (\\'
@@ -287,13 +336,40 @@ static vef_next_wakeup_t rest_worker(vef_wakeup_reason_t reason,
       g_schema_cache.refresh_if_needed(session, schema_name,
                                        static_cast<int>(g_schema_ttl));
 
-      // Parse access-control config once per wakeup (cheap; may change via SET GLOBAL).
-      auto allowed_tables   = parse_allowed_tables(g_allowed_tables);
-      auto allowed_routines = parse_allowed_tables(g_allowed_routines);
-      auto table_methods    = parse_table_methods(g_table_methods);
-
       // Drain and process all queued requests.
       auto pending = g_queue->drain();
+      if (pending.empty()) {
+        return reason == VEF_WAKEUP_POLL_FD
+                   ? vef_next_wakeup_t{0, g_queue->signal_fd()}
+                   : vef_next_wakeup_t{};
+      }
+
+      std::string jwt_secret;
+      std::string jwt_pubkey;
+      std::string allowed_tables_sv;
+      std::string allowed_routines_sv;
+      std::string table_methods_sv;
+      const std::pair<const char*, std::string*> str_vars[] = {
+          {"jwt_secret", &jwt_secret},
+          {"jwt_public_key", &jwt_pubkey},
+          {"allowed_tables", &allowed_tables_sv},
+          {"allowed_routines", &allowed_routines_sv},
+          {"table_methods", &table_methods_sv}};
+      for (const auto& [name, out] : str_vars) {
+        // An unreadable allowlist must not be taken as empty, which allows
+        // every table.
+        if (!read_str_var(name, *out)) {
+          reject(std::move(pending), vsql_rest::Status::kInternalServerError,
+                 std::string("cannot read vsql_rest.") + name);
+          return {};
+        }
+      }
+
+      // Parse access-control config once per wakeup (cheap; may change via SET GLOBAL).
+      auto allowed_tables   = parse_allowed_tables(allowed_tables_sv.c_str());
+      auto allowed_routines = parse_allowed_tables(allowed_routines_sv.c_str());
+      auto table_methods    = parse_table_methods(table_methods_sv.c_str());
+
       g_requests_active += static_cast<long long>(pending.size());
 
       for (auto& p : pending) {
@@ -301,8 +377,8 @@ static vef_next_wakeup_t rest_worker(vef_wakeup_reason_t reason,
         vsql_rest::HttpResponse resp = vsql_rest::execute_request(
             session, p.req,
             schema_name, g_schema_cache,
-            g_jwt_secret  ? g_jwt_secret  : "",
-            g_jwt_pubkey  ? g_jwt_pubkey  : "",
+            jwt_secret,
+            jwt_pubkey,
             g_require_auth,
             g_max_rows,
             allowed_tables,
@@ -354,6 +430,11 @@ static vef_next_wakeup_t rest_worker(vef_wakeup_reason_t reason,
       g_tls_ctx.reset();
 
       g_queue.reset();
+
+      // g_schema_cache is static and outlives DISABLE, and even UNINSTALL and
+      // INSTALL in one server, so a table created while the server was off
+      // would otherwise stay invisible until the TTL expires.
+      g_schema_cache.clear();
 
       return {};
     }

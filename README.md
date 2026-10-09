@@ -77,7 +77,7 @@ Then configure via `SET GLOBAL`:
 | `vsql_rest.ssl_port` | 3443 | HTTPS listen port (0 = OS-assigned) |
 | `vsql_rest.ssl_cert` | `""` | Path to TLS certificate file |
 | `vsql_rest.ssl_key` | `""` | Path to TLS private key file |
-| `vsql_rest.schema` | `""` | Database schema to expose |
+| `vsql_rest.schema` | `""` | Database schema to expose; until it is set, every table and RPC request gets `503` with code `VSQL0007` |
 | `vsql_rest.require_auth` | OFF | Require JWT on all requests |
 | `vsql_rest.jwt_secret` | `""` | HMAC secret for HS256 tokens |
 | `vsql_rest.jwt_public_key` | `""` | RSA public key path for RS256 tokens |
@@ -306,7 +306,7 @@ For production deployments, a TLS-terminating reverse proxy (nginx, Caddy) in fr
 
 2. **No parameterized queries** — `sql_query` executes string SQL with no parameter binding. Injection prevention relies on value escaping and column/table whitelist validation against the schema cache.
 
-3. **Schema cache TTL** — DDL changes (new tables, ALTER TABLE, new views) are not reflected until the next cache refresh (default 60s, configurable via `vsql_rest.schema_ttl`).
+3. **Schema cache TTL** — DDL changes (new tables, ALTER TABLE, new views) are not reflected until the next cache refresh (default 60s, configurable via `vsql_rest.schema_ttl`). Changing `vsql_rest.schema`, or turning `vsql_rest_enabled` off and on, rebuilds the cache on the next request.
 
 4. **JWT user variable workaround** — MySQL views cannot reference user variables directly. Use a stored function wrapper (see Authentication section above).
 
@@ -361,6 +361,12 @@ For production deployments, a TLS-terminating reverse proxy (nginx, Caddy) in fr
     library given a generator or stream — must buffer it and send a
     `Content-Length` instead. A reverse proxy in front of the extension can do
     this for you; nginx buffers request bodies by default.
+
+13. **String settings are limited to 1022 bytes** — the extension reads its
+    string variables through the server, which returns at most 1022 bytes. A
+    longer `schema`, `allowed_tables`, `allowed_routines`, `table_methods`,
+    `jwt_secret` or `jwt_public_key` makes every request fail with `500`; a
+    longer `ssl_cert` or `ssl_key` keeps the REST listener from starting.
 
 ## Security Considerations
 

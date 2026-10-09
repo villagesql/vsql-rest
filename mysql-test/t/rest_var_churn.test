@@ -1,0 +1,47 @@
+--source rest_setup.inc
+
+# A SET GLOBAL on a string variable frees the old value from the client's
+# thread while the REST worker serves requests. Keep changing the schema and
+# the table allowlist from one connection while many requests run, and require
+# every answer to be correct for one schema or the other.
+
+CREATE DATABASE test_rest2;
+CREATE TABLE test_rest2.customers LIKE test_rest.customers;
+INSERT INTO test_rest2.customers VALUES (1, 'Zed', 'zed@example.com', 50);
+
+CREATE TABLE test_rest.stop_churn (x INT);
+delimiter //;
+CREATE PROCEDURE test_rest.churn()
+BEGIN
+  DECLARE i INT DEFAULT 0;
+  WHILE NOT EXISTS (SELECT 1 FROM test_rest.stop_churn) DO
+    SET GLOBAL vsql_rest.schema = IF(i % 2 = 0, 'test_rest2', 'test_rest');
+    SET GLOBAL vsql_rest.allowed_tables = IF(i % 2 = 0, 'customers', '');
+    SET i = i + 1;
+  END WHILE;
+END//
+delimiter ;//
+
+--connect (con1, localhost, root,,)
+--send CALL test_rest.churn()
+
+--connection default
+--exec REST_PORT=$REST_PORT python3 -B $MYSQL_TEST_DIR/suite/vsql-rest/t/rest_var_churn_helper.py
+INSERT INTO test_rest.stop_churn VALUES (1);
+
+--connection con1
+--reap
+--disconnect con1
+--source include/wait_until_disconnected.inc
+
+--connection default
+SET GLOBAL vsql_rest.schema = 'test_rest';
+SET GLOBAL vsql_rest.allowed_tables = '';
+
+--echo # An allowlist too long to read refuses requests instead of allowing all.
+SET GLOBAL vsql_rest.allowed_tables = REPEAT('x', 1100);
+--exec curl -s -w "\n%{http_code}\n" "http://localhost:$REST_PORT/customers"
+SET GLOBAL vsql_rest.allowed_tables = '';
+
+DROP DATABASE test_rest2;
+--source rest_teardown.inc

@@ -1,0 +1,17 @@
+# With vsql_rest.schema empty, every request is answered at once with a 503
+# that names the missing setting. curl -m 10 makes a request that is never
+# answered fail this test instead of hanging it.
+
+INSTALL EXTENSION vsql_rest;
+--disable_query_log
+SET GLOBAL vsql_rest.port = 0;
+--enable_query_log
+SET GLOBAL vsql_rest.schema = '';
+SET GLOBAL vsql_rest.vsql_rest_enabled = ON;
+--source rest_wait_http.inc
+
+--exec curl -s -m 10 -w "\n%{http_code}\n" "http://localhost:$REST_PORT/t"
+
+SET GLOBAL vsql_rest.vsql_rest_enabled = OFF;
+--sleep 0.5
+UNINSTALL EXTENSION vsql_rest;

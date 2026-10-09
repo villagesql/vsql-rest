@@ -29,13 +29,15 @@
 namespace vsql_rest {
 
 // Thread-safe schema cache. Populated from INFORMATION_SCHEMA on first use
-// and refreshed after schema_ttl_seconds elapses. Used by sql_executor to
-// validate table/column names (injection prevention) and build FK join queries.
+// and refreshed after schema_ttl_seconds elapses or when the schema name
+// changes. Used by sql_executor to validate table/column names (injection
+// prevention) and build FK join queries.
 class SchemaCache {
  public:
   SchemaCache() = default;
 
-  // Ensure cache is populated. Refreshes if stale. Returns false on error.
+  // Ensure cache is populated for schema_name. Refreshes if stale or built for
+  // another schema. Returns false on error.
   bool refresh_if_needed(vsql::preview_sql_query::Session& session,
                          const std::string& schema_name,
                          int ttl_seconds);
@@ -43,6 +45,9 @@ class SchemaCache {
   // Force a full refresh regardless of TTL. Returns false on error.
   bool refresh(vsql::preview_sql_query::Session& session,
                const std::string& schema_name);
+
+  // Drop everything, so the next refresh_if_needed rebuilds from scratch.
+  void clear();
 
   bool table_exists(const std::string& name) const;
   const TableInfo* get_table(const std::string& name) const;
@@ -57,6 +62,7 @@ class SchemaCache {
   mutable std::mutex mu_;
   std::unordered_map<std::string, TableInfo> tables_;
   std::unordered_map<std::string, RoutineInfo> routines_;
+  std::string schema_name_;
   std::time_t last_refresh_{0};
   bool populated_{false};
 };
