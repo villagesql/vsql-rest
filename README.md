@@ -362,6 +362,12 @@ For production deployments, a TLS-terminating reverse proxy (nginx, Caddy) in fr
     `Content-Length` instead. A reverse proxy in front of the extension can do
     this for you; nginx buffers request bodies by default.
 
+13. **String settings are limited to 1022 bytes** — the extension reads its
+    string variables through the server, which returns at most 1022 bytes. A
+    longer `schema`, `allowed_tables`, `allowed_routines`, `table_methods`,
+    `jwt_secret` or `jwt_public_key` makes every request fail with `500`; a
+    longer `ssl_cert` or `ssl_key` keeps the REST listener from starting.
+
 ## Security Considerations
 
 - **MySQL grants are bypassed** — vsql_rest executes queries through an internal session; `GRANT`/`REVOKE` have no effect on what the REST API can read or write. Use `allowed_tables`, `allowed_routines`, and `table_methods` to restrict the exposed surface, and JWT + view-based row filtering for per-caller access control. See [Access Control](#access-control).
