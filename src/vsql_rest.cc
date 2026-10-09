@@ -35,6 +35,7 @@
 #include <unistd.h>
 
 #include "http_server.h"
+#include "json_emit.h"
 #include "request_queue.h"
 #include "schema_cache.h"
 #include "sql_executor.h"
@@ -169,6 +170,19 @@ parse_table_methods(const char* sv) {
 // Thread worker callback
 // ============================================================================
 
+// Answers every queued request with a 503. A wakeup that cannot run requests
+// must still drain the queue: each connection thread waits on its request's
+// promise (handle_connection in http_server.cc), and the undrained signal pipe
+// would keep the poll fd readable.
+static void reject_pending(const char* message, const char* code) {
+  for (auto& p : g_queue->drain()) {
+    vsql_rest::HttpResponse resp;
+    resp.status = vsql_rest::Status::kServiceUnavailable;
+    resp.body = vsql_rest::emit_error(message, code);
+    p.promise.set_value(std::move(resp));
+  }
+}
+
 static vef_next_wakeup_t rest_worker(vef_wakeup_reason_t reason,
                                      vef_thread_handle_t* handle,
                                      void* /*arg*/) {
@@ -265,14 +279,24 @@ static vef_next_wakeup_t rest_worker(vef_wakeup_reason_t reason,
 
     case VEF_WAKEUP_POLL_FD:
     case VEF_WAKEUP_PERIODIC: {
-      if (!g_queue || !handle) return {};
+      if (!g_queue) return {};
 
       std::string schema_name = g_schema ? g_schema : "";
-      if (schema_name.empty()) return {};
+      if (schema_name.empty()) {
+        reject_pending("vsql_rest.schema is not set", "VSQL0007");
+        return {};
+      }
 
       // Open SQL session for this wakeup.
+      if (!handle) {
+        reject_pending("SQL session unavailable", "VSQL0001");
+        return {};
+      }
       auto session = g_sql_query_cap.open(handle);
-      if (!session) return {};
+      if (!session) {
+        reject_pending("SQL session unavailable", "VSQL0001");
+        return {};
+      }
 
       // The SQL executor escapes user input with backslash escaping. If the
       // server runs with NO_BACKSLASH_ESCAPES that escaping is defeated (\\'

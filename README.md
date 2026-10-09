@@ -77,7 +77,7 @@ Then configure via `SET GLOBAL`:
 | `vsql_rest.ssl_port` | 3443 | HTTPS listen port (0 = OS-assigned) |
 | `vsql_rest.ssl_cert` | `""` | Path to TLS certificate file |
 | `vsql_rest.ssl_key` | `""` | Path to TLS private key file |
-| `vsql_rest.schema` | `""` | Database schema to expose |
+| `vsql_rest.schema` | `""` | Database schema to expose; until it is set, every table and RPC request gets `503` with code `VSQL0007` |
 | `vsql_rest.require_auth` | OFF | Require JWT on all requests |
 | `vsql_rest.jwt_secret` | `""` | HMAC secret for HS256 tokens |
 | `vsql_rest.jwt_public_key` | `""` | RSA public key path for RS256 tokens |
