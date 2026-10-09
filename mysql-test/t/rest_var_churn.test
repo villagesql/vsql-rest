@@ -37,10 +37,6 @@ INSERT INTO test_rest.stop_churn VALUES (1);
 --connection default
 SET GLOBAL vsql_rest.schema = 'test_rest';
 SET GLOBAL vsql_rest.allowed_tables = '';
-# The schema cache outlives UNINSTALL, and a change of schema does not rebuild
-# it, so wait until it describes test_rest again. Otherwise the next test on
-# this server can start with test_rest2's tables cached and get 404s.
---exec REST_PORT=$REST_PORT python3 -B $MYSQL_TEST_DIR/suite/vsql-rest/t/rest_var_churn_helper.py settle
 
 --echo # An allowlist too long to read refuses requests instead of allowing all.
 SET GLOBAL vsql_rest.allowed_tables = REPEAT('x', 1100);

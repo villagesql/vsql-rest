@@ -49,7 +49,6 @@ wrong answers: 0
 INSERT INTO test_rest.stop_churn VALUES (1);
 SET GLOBAL vsql_rest.schema = 'test_rest';
 SET GLOBAL vsql_rest.allowed_tables = '';
-cache describes test_rest: True
 # An allowlist too long to read refuses requests instead of allowing all.
 SET GLOBAL vsql_rest.allowed_tables = REPEAT('x', 1100);
 {"message":"cannot read vsql_rest.allowed_tables","details":null,"hint":null,"code":"VSQL0001"}

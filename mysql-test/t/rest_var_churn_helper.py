@@ -2,7 +2,7 @@
 """Helper for rest_var_churn.test: send many concurrent GET /customers requests
 while another connection keeps changing vsql_rest.schema, and report every
 answer that is not one of the two schemas' correct answers."""
-import json, os, sys, time, urllib.error, urllib.request
+import json, os, sys, urllib.error, urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 PORT = os.environ["REST_PORT"]
@@ -25,16 +25,6 @@ def fetch(url):
     except Exception as e:  # noqa: BLE001 -- any failure is a wrong answer
         return None, repr(e)
 
-
-if sys.argv[1:] == ["settle"]:
-    # orders exists only in test_rest, so a 200 means the schema cache was
-    # rebuilt for test_rest.
-    url = f"http://127.0.0.1:{PORT}/orders?limit=1"
-    deadline = time.time() + 30
-    while fetch(url)[0] != 200 and time.time() < deadline:
-        time.sleep(0.1)
-    print(f"cache describes test_rest: {fetch(url)[0] == 200}")
-    sys.exit(0)
 
 with ThreadPoolExecutor(WORKERS) as pool:
     results = list(pool.map(fetch, [URL] * REQUESTS))

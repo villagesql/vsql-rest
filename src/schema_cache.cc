@@ -106,7 +106,7 @@ bool SchemaCache::refresh(vsql::preview_sql_query::Session& session,
   std::string rtn_sql =
       "SELECT ROUTINE_NAME, ROUTINE_TYPE "
       "FROM INFORMATION_SCHEMA.ROUTINES "
-      "WHERE ROUTINE_SCHEMA = '" + schema_name + "'";
+      "WHERE ROUTINE_SCHEMA = '" + esc_schema + "'";
 
   auto rtn_result = session.sql(rtn_sql).execute();
   if (!rtn_result.has_error()) {
@@ -129,7 +129,7 @@ bool SchemaCache::refresh(vsql::preview_sql_query::Session& session,
   std::string prm_sql =
       "SELECT SPECIFIC_NAME, PARAMETER_NAME "
       "FROM INFORMATION_SCHEMA.PARAMETERS "
-      "WHERE SPECIFIC_SCHEMA = '" + schema_name + "' "
+      "WHERE SPECIFIC_SCHEMA = '" + esc_schema + "' "
       "AND ORDINAL_POSITION > 0 "
       "ORDER BY SPECIFIC_NAME, ORDINAL_POSITION";
 
