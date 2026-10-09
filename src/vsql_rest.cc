@@ -379,6 +379,11 @@ static vef_next_wakeup_t rest_worker(vef_wakeup_reason_t reason,
 
       g_queue.reset();
 
+      // g_schema_cache is static and outlives DISABLE, and even UNINSTALL and
+      // INSTALL in one server, so a table created while the server was off
+      // would otherwise stay invisible until the TTL expires.
+      g_schema_cache.clear();
+
       return {};
     }
   }

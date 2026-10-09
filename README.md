@@ -306,7 +306,7 @@ For production deployments, a TLS-terminating reverse proxy (nginx, Caddy) in fr
 
 2. **No parameterized queries** — `sql_query` executes string SQL with no parameter binding. Injection prevention relies on value escaping and column/table whitelist validation against the schema cache.
 
-3. **Schema cache TTL** — DDL changes (new tables, ALTER TABLE, new views) are not reflected until the next cache refresh (default 60s, configurable via `vsql_rest.schema_ttl`).
+3. **Schema cache TTL** — DDL changes (new tables, ALTER TABLE, new views) are not reflected until the next cache refresh (default 60s, configurable via `vsql_rest.schema_ttl`). Changing `vsql_rest.schema`, or turning `vsql_rest_enabled` off and on, rebuilds the cache on the next request.
 
 4. **JWT user variable workaround** — MySQL views cannot reference user variables directly. Use a stored function wrapper (see Authentication section above).
 

@@ -1,0 +1,41 @@
+--source rest_setup.inc
+
+# A TTL far longer than the test means that only a change of schema, or a
+# restart of the server, can make the cache rebuild itself.
+SET GLOBAL vsql_rest.schema_ttl = 3600;
+--exec curl -s -o /dev/null -w "%{http_code}\n" "http://localhost:$REST_PORT/customers"
+
+CREATE DATABASE test_rest2;
+CREATE TABLE test_rest2.widgets (id INT PRIMARY KEY, name VARCHAR(20));
+INSERT INTO test_rest2.widgets VALUES (1, 'sprocket');
+
+--echo # A new schema is served at once, without waiting for the TTL.
+SET GLOBAL vsql_rest.schema = 'test_rest2';
+--exec curl -s -w "\n%{http_code}\n" "http://localhost:$REST_PORT/widgets"
+--echo # The old schema's tables are gone with it.
+--exec curl -s -w "\n%{http_code}\n" "http://localhost:$REST_PORT/customers"
+
+--echo # A table created while the server is off is served after it restarts.
+SET GLOBAL vsql_rest.vsql_rest_enabled = OFF;
+CREATE TABLE test_rest2.gadgets (id INT PRIMARY KEY);
+INSERT INTO test_rest2.gadgets VALUES (7);
+SET GLOBAL vsql_rest.vsql_rest_enabled = ON;
+--source rest_wait_http.inc
+--exec curl -s -w "\n%{http_code}\n" "http://localhost:$REST_PORT/gadgets"
+
+--echo # A table created between UNINSTALL and INSTALL is served after INSTALL.
+SET GLOBAL vsql_rest.vsql_rest_enabled = OFF;
+UNINSTALL EXTENSION vsql_rest;
+CREATE TABLE test_rest2.gizmos (id INT PRIMARY KEY);
+INSERT INTO test_rest2.gizmos VALUES (9);
+INSTALL EXTENSION vsql_rest;
+--disable_query_log
+SET GLOBAL vsql_rest.port = 0;
+--enable_query_log
+SET GLOBAL vsql_rest.schema = 'test_rest2';
+SET GLOBAL vsql_rest.vsql_rest_enabled = ON;
+--source rest_wait_http.inc
+--exec curl -s -w "\n%{http_code}\n" "http://localhost:$REST_PORT/gizmos"
+
+DROP DATABASE test_rest2;
+--source rest_teardown.inc
