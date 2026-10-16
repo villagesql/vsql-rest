@@ -1,3 +1,6 @@
+# Valgrind runs one thread at a time, so the busy SET GLOBAL loop starves the
+# REST worker and every request times out.
+--source include/not_valgrind.inc
 --source rest_setup.inc
 
 # A SET GLOBAL on a string variable frees the old value from the client's
