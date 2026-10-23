@@ -64,9 +64,10 @@ std::future<HttpResponse> RequestQueue::enqueue(HttpRequest req) {
   }
 
   // Signal the thread_worker. One byte is sufficient; non-blocking write
-  // silently drops if pipe buffer is full (means signal already pending).
+  // fails if pipe buffer is full (means signal already pending).
   char byte = 1;
-  write(pipe_[1], &byte, 1);
+  if (write(pipe_[1], &byte, 1) < 0) {
+  }
   return future;
 }
 

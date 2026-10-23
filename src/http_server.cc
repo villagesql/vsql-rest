@@ -142,9 +142,7 @@ std::string format_http_response(const HttpResponse& resp) {
   // Required headers.
   out += "Connection: close\r\n";
 
-  char clen[32];
-  snprintf(clen, sizeof(clen), "Content-Length: %zu\r\n", resp.body.size());
-  out += clen;
+  out += "Content-Length: " + std::to_string(resp.body.size()) + "\r\n";
 
   // Caller-provided headers.
   bool has_content_type = false;
