@@ -730,10 +730,7 @@ static HttpResponse handle_get(vsql::preview_sql_query::Session& session,
                             "." + backtick(table_name) + where;
     auto count_result = session.sql(count_sql).execute();
     if (!count_result.has_error() && count_result.next()) {
-      auto sv = count_result.column_str(0);
-      if (sv.data()) {
-        try { total_count = std::stoll(std::string(sv)); } catch (...) {}
-      }
+      total_count = count_result.column_int(0);
     }
   }
 
@@ -831,10 +828,7 @@ static HttpResponse handle_post(vsql::preview_sql_query::Session& session,
     // Get LAST_INSERT_ID.
     auto lid_r = session.sql("SELECT LAST_INSERT_ID()").execute();
     if (!lid_r.has_error() && lid_r.next()) {
-      auto sv = lid_r.column_str(0);
-      if (sv.data()) {
-        try { last_insert_id = std::stoll(std::string(sv)); } catch (...) {}
-      }
+      last_insert_id = lid_r.column_int(0);
     }
   }
 
