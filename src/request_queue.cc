@@ -63,10 +63,11 @@ std::future<HttpResponse> RequestQueue::enqueue(HttpRequest req) {
     queue_.push(std::move(pending));
   }
 
-  // Signal the thread_worker. One byte is sufficient; non-blocking write
-  // silently drops if pipe buffer is full (means signal already pending).
+  // Signal the thread_worker. One byte is sufficient. A failed write needs no
+  // handling: EAGAIN means a signal is already pending, and rest_worker's 50ms
+  // fallback wakeup drains the queue on any other error.
   char byte = 1;
-  write(pipe_[1], &byte, 1);
+  [[maybe_unused]] ssize_t n = write(pipe_[1], &byte, 1);
   return future;
 }
 
