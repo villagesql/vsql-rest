@@ -111,8 +111,9 @@ directly from request input.
 ## Preview APIs in use
 
 All four are from `villagesql/preview/`. Their API and ABI may change between
-VillageSQL releases. Building requires `include-dev/` to precede `include/` in
-the compiler include path (handled by CMakeLists.txt).
+VillageSQL releases. All four are present in the stable include tree as of
+stable_sdk/v5, so building needs only the framework-provided include path
+(handled by CMakeLists.txt) — no `include-dev/` override.
 
 - `preview/thread_worker` — background server loop
 - `preview/sql_query` — execute SQL from thread_worker context

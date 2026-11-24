@@ -94,10 +94,11 @@ if(VSQL_VALGRIND)
     endif()
 endif()
 
-# include-dev must come before include so preview headers take precedence
-# over older protocol headers in the stable include tree
+# The four preview capabilities this extension uses (thread_worker, sql_query,
+# sys_var, status_var) are all present in the stable include tree as of
+# stable_sdk/v5, so the framework-provided include path alone is enough; no
+# include-dev override is needed to reach them.
 target_include_directories(vsql_rest PRIVATE
-    "${VillageSQL_PREFIX}/include-dev"
     "${VillageSQLExtensionFramework_INCLUDE_DIR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/third_party"
