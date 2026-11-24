@@ -1155,6 +1155,11 @@ static HttpResponse handle_discovery(
 
 // --- Main dispatcher ---
 
+// Called once per pending request from rest_worker's POLL_FD/PERIODIC arm,
+// over attacker-supplied HTTP request bodies. Catching here fails just this
+// request with a 500; rest_worker's own guard would drop the whole batch. A
+// function-try-block avoids an extra indentation level over this ~190-line
+// body.
 HttpResponse execute_request(vsql::preview_sql_query::Session& session,
                              const HttpRequest& req,
                              const std::string& schema_name,
@@ -1166,7 +1171,7 @@ HttpResponse execute_request(vsql::preview_sql_query::Session& session,
                              const std::unordered_set<std::string>& allowed_tables,
                              const std::unordered_set<std::string>& allowed_routines,
                              const std::unordered_map<std::string,
-                               std::unordered_set<std::string>>& table_methods) {
+                               std::unordered_set<std::string>>& table_methods) try {
   HttpResponse resp;
   resp.headers.emplace_back("Content-Type", "application/json");
 
@@ -1358,6 +1363,18 @@ HttpResponse execute_request(vsql::preview_sql_query::Session& session,
     resp.body = emit_error("method not allowed: " + req.method);
     return resp;
   }
+} catch (const std::exception& e) {
+  HttpResponse resp;
+  resp.status = Status::kInternalServerError;
+  resp.headers.emplace_back("Content-Type", "application/json");
+  resp.body = emit_error(std::string("internal error: ") + e.what());
+  return resp;
+} catch (...) {
+  HttpResponse resp;
+  resp.status = Status::kInternalServerError;
+  resp.headers.emplace_back("Content-Type", "application/json");
+  resp.body = emit_error("internal error: unknown failure");
+  return resp;
 }
 
 }  // namespace vsql_rest

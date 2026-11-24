@@ -73,7 +73,7 @@ static constexpr int kRequestTimeoutSeconds = 30;
 static std::atomic<int> g_active_connections{0};
 
 // Releases the connection slot when the connection thread exits, by whichever
-// path — including an exception escaping handle_connection().
+// path.
 namespace {
 struct ConnectionSlot {
   ~ConnectionSlot() { g_active_connections.fetch_sub(1, std::memory_order_relaxed); }
@@ -230,8 +230,9 @@ static bool parse_http_request(const std::string& raw, HttpRequest& req,
 }
 
 // Handle a single connection: read request, push to queue, wait, send response.
+// Runs on a detached thread, where an escaping exception calls std::terminate.
 template <typename Conn>
-static void handle_connection(Conn& conn, RequestQueue* queue) {
+static void handle_connection(Conn& conn, RequestQueue* queue) try {
   const auto started = SteadyClock::now();
   std::string raw = read_request_raw(conn, started);
   if (raw.empty()) return;
@@ -326,6 +327,10 @@ static void handle_connection(Conn& conn, RequestQueue* queue) {
 
   std::string raw_resp = format_http_response(resp);
   conn.write_all(raw_resp.data(), static_cast<int>(raw_resp.size()));
+} catch (const std::exception& e) {
+  fprintf(stderr, "vsql_rest: connection failed: %s\n", e.what());
+} catch (...) {
+  fprintf(stderr, "vsql_rest: connection failed\n");
 }
 
 // Connection threads are detached, so DISABLE has nothing to join. It must
@@ -365,15 +370,19 @@ void accept_loop(int listen_fd, SSL_CTX* ssl_ctx,
       // Refuse before spawning a thread — spawning one is the cost being
       // capped. A TLS client gets a bare close: answering it would require
       // completing the handshake this branch exists to avoid.
+      // An exception here would end the accept thread with std::terminate.
       if (!ssl_ctx) {
-        HttpResponse resp;
-        resp.status = Status::kServiceUnavailable;
-        resp.body = "{\"message\":\"too many connections\",\"details\":null,"
-                    "\"hint\":null,\"code\":\"VSQL0005\"}";
-        resp.headers.emplace_back("Content-Type", "application/json");
-        std::string raw_resp = format_http_response(resp);
-        PlainConn conn(client_fd);
-        conn.write_all(raw_resp.data(), static_cast<int>(raw_resp.size()));
+        try {
+          HttpResponse resp;
+          resp.status = Status::kServiceUnavailable;
+          resp.body = "{\"message\":\"too many connections\","
+                      "\"details\":null,\"hint\":null,\"code\":\"VSQL0005\"}";
+          resp.headers.emplace_back("Content-Type", "application/json");
+          std::string raw_resp = format_http_response(resp);
+          PlainConn conn(client_fd);
+          conn.write_all(raw_resp.data(), static_cast<int>(raw_resp.size()));
+        } catch (...) {
+        }
       }
       close(client_fd);
       continue;

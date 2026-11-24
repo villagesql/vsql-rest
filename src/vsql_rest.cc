@@ -195,9 +195,23 @@ static void reject(std::vector<vsql_rest::PendingRequest> pending,
   }
 }
 
+// For rest_worker's exception guard. Empties the signal pipe, so the poll fd
+// does not stay readable and spin the worker, and drops the waiting requests;
+// each sees a broken promise, which handle_connection answers with a 503.
+static void drop_queued() noexcept {
+  if (!g_queue) return;
+  try {
+    g_queue->drain();
+  } catch (...) {
+  }
+}
+
+// The server calls this with no exception guard (thread_main and worker_start
+// in the server's thread_worker service), so an escaping exception would
+// terminate the server.
 static vef_next_wakeup_t rest_worker(vef_wakeup_reason_t reason,
                                      vef_thread_handle_t* handle,
-                                     void* /*arg*/) {
+                                     void* /*arg*/) try {
   switch (reason) {
     case VEF_WAKEUP_ENABLE: {
       // handle is NULL at ENABLE — cannot open SQL session here.
@@ -370,7 +384,12 @@ static vef_next_wakeup_t rest_worker(vef_wakeup_reason_t reason,
       auto allowed_routines = parse_allowed_tables(allowed_routines_sv.c_str());
       auto table_methods    = parse_table_methods(table_methods_sv.c_str());
 
-      g_requests_active += static_cast<long long>(pending.size());
+      // Gives back the count of any request a dropped batch never ran.
+      struct ActiveCount {
+        long long left;
+        ~ActiveCount() { g_requests_active -= left; }
+      } active{static_cast<long long>(pending.size())};
+      g_requests_active += active.left;
 
       for (auto& p : pending) {
         ++g_requests_total;
@@ -384,6 +403,7 @@ static vef_next_wakeup_t rest_worker(vef_wakeup_reason_t reason,
             allowed_tables,
             allowed_routines,
             table_methods);
+        --active.left;
         --g_requests_active;
 
         p.promise.set_value(std::move(resp));
@@ -439,6 +459,14 @@ static vef_next_wakeup_t rest_worker(vef_wakeup_reason_t reason,
       return {};
     }
   }
+  return {};
+} catch (const std::exception& e) {
+  fprintf(stderr, "[vsql_rest] worker wakeup failed: %s\n", e.what());
+  drop_queued();
+  return {};
+} catch (...) {
+  fprintf(stderr, "[vsql_rest] worker wakeup failed\n");
+  drop_queued();
   return {};
 }
 
