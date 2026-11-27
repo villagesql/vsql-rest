@@ -41,9 +41,11 @@ INSERT INTO test_rest.stop_churn VALUES (1);
 SET GLOBAL vsql_rest.schema = 'test_rest';
 SET GLOBAL vsql_rest.allowed_tables = '';
 
---echo # An allowlist too long to read refuses requests instead of allowing all.
+--echo # An allowlist longer than 1024 bytes is read in full.
 SET GLOBAL vsql_rest.allowed_tables = REPEAT('x', 1100);
---exec curl -s -w "\n%{http_code}\n" "http://localhost:$REST_PORT/customers"
+--exec curl -s -o /dev/null -w "%{http_code}\n" "http://localhost:$REST_PORT/customers"
+SET GLOBAL vsql_rest.allowed_tables = CONCAT(REPEAT('x', 1100), ',customers');
+--exec curl -s -o /dev/null -w "%{http_code}\n" "http://localhost:$REST_PORT/customers"
 SET GLOBAL vsql_rest.allowed_tables = '';
 
 DROP DATABASE test_rest2;
